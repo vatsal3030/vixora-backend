@@ -6,7 +6,66 @@ datasource db {
   provider = "postgresql"
 }
 
-model HealthCheck {
-  id        Int      @id @default(autoincrement())
-  createdAt DateTime @default(now())
+model User {
+  id            String   @id @default(uuid())
+
+  username      String?  @unique
+  email         String?  @unique
+  fullName      String
+
+  avatar        String?
+  coverImage    String?
+
+  password      String?
+  refreshToken  String?
+
+  // OAuth
+  authProvider  AuthProvider @default(LOCAL)
+  providerId    String?
+
+  // OTP / security
+  emailVerified Boolean  @default(false)
+  otpHash       String?
+  otpExpiresAt  DateTime?
+
+  // ✅ Relations
+  videos        Video[]               @relation("VideoOwner")   // owned videos
+  watchHistory  Video[]               @relation("WatchHistory") // watched videos
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([username])
+  @@index([email])
+}
+
+model Video {
+  id           String   @id @default(uuid())
+
+  videoFile    String
+  thumbnail    String
+  title        String
+  description  String
+  duration     Int
+  views        Int      @default(0)
+  isPublished  Boolean  @default(true)
+
+  // ✅ Owner relation (many videos → one user)
+  ownerId      String 
+  owner        User     @relation("VideoOwner", fields: [ownerId], references: [id])
+
+  // ✅ Watch history (many-to-many)
+  watchedBy    User[]   @relation("WatchHistory")
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  GITHUB
+  FACEBOOK
 }
