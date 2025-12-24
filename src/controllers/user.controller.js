@@ -6,9 +6,10 @@ import { createUserSchema } from "../schemas/CreateUserSchema.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { generateAccessToken } from "../utils/jwt.js";
+import { generateRefreshToken } from "../utils/jwt.js";
+import jwt from 'jsonwebtoken'
 
-
-const generateAccessAndRefreshToken = async (userId) => {
+export const generateAccessAndRefreshToken = async (userId) => {
     try {
         const user = await prisma.user.findUnique({
             where: {
@@ -19,13 +20,13 @@ const generateAccessAndRefreshToken = async (userId) => {
         const accessToken = generateAccessToken(user)
         const refreshToken = generateRefreshToken(user)
 
-        user.refreshToken = refreshToken
+        // user.refreshToken = refreshToken
         await prisma.user.update({
             where: {
                 id: userId
             },
             data: {
-                refreshToken: refreshToken
+                refreshToken
             }
         })
 
@@ -37,7 +38,7 @@ const generateAccessAndRefreshToken = async (userId) => {
 }
 
 
-const registerUser = asyncHandler(async (req, res) => {
+export const registerUser = asyncHandler(async (req, res) => {
     // Validate request body
     // get user details from frontend
     // validation
@@ -60,7 +61,7 @@ const registerUser = asyncHandler(async (req, res) => {
     // console.log({ fullName, email, username, password })
 
     if ([fullName, email, username, password].some((field) =>
-        field?.trim().length === "")) {
+        field?.trim().length === 0)) {
         throw new ApiError(400, "All fields are required")
     }
 
@@ -127,7 +128,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
 })
 
-const loginUser = asyncHandler(async (req, res) => {
+export const loginUser = asyncHandler(async (req, res) => {
     //   req->body -> data
     //   username or email based login
     // find user
@@ -137,11 +138,11 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const { email, username, password } = req.body
 
-    if (!username || !email) {
+    if (!username && !email) {
         throw new ApiError(400, "username or email is required")
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.user.findFirst({
         where: {
             OR: [{ email }, { username }]
         }
@@ -195,14 +196,70 @@ const loginUser = asyncHandler(async (req, res) => {
 
 })
 
-const logOutUser = asyncHandler(async(req,res)=>{
-    
+export const logOutUser = asyncHandler(async (req, res) => {
+    await prisma.user.update({
+        where: {
+            id: req.user.id
+        },
+        data: {
+            refreshToken: null
+        }
+    })
+
+    const options = {
+        httpOnly: true,
+        secure: true,
+    }
+
+    return res.
+        status(200).
+        clearCookie("accessToken", options).
+        clearCookie("refreshToken", options).
+        json(
+            new ApiResponse
+                (200,
+                    {},
+                    "User logged out successfully"
+                ))
 })
 
-export default {
-    registerUser,
-    loginUser
-}
+export const refreshAccessToken = asyncHandler(async (req, res) => {
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
+    if (!incomingRefreshToken) throw new ApiError(401, "Unothorized request")
+
+    try {
+        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET)
+    
+        const user = await prisma.user.findUnique({
+            where: { id: decodedToken?.id }
+        })
+    
+        if (!user) throw new ApiError(401, "Invalid refresh token")
+    
+        if (incomingRefreshToken !== user.refreshToken) throw new ApiError(401, "Refresh token is expired or used")
+    
+        const options = {
+            httpOnly: true,
+            secure: true,
+        }
+    
+        const { accessToken, newRefreshToken } = await generateAccessAndRefreshToken(user.id)
+    
+        return res.
+            status(200).
+            cookie("accessToken", accessToken, options).
+            cookie("refreshToken", newRefreshToken, options).
+            json(
+                new ApiResponse(200,
+                    { accessToken, refreshToken: newRefreshToken },
+                    "Access token refreshed successfully"
+                )
+            )
+    } catch (error) {
+        throw new ApiError(401, error?.message || "Invalid refresh token")
+    }
+
+})
 
 
 
