@@ -7,62 +7,149 @@ datasource db {
 }
 
 model User {
-  id                 String         @id @default(uuid())
-  username           String?        @unique
-  email              String?        @unique
+  id                 String       @id @default(uuid())
+  username           String?      @unique
+  email              String?      @unique
   fullName           String
   avatar             String?
   coverImage         String?
   password           String?
   refreshToken       String?
-  authProvider       AuthProvider   @default(LOCAL)
+  authProvider       AuthProvider @default(LOCAL)
   providerId         String?
-  emailVerified      Boolean        @default(false)
+  emailVerified      Boolean      @default(false)
   otpHash            String?
   otpExpiresAt       DateTime?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
-  avatarPublicId     String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  avatarPublicId     String?     
   coverImagePublicId String?
-  subscribers        Subscription[] @relation("UserSubscribers")
-  subscriptions      Subscription[] @relation("UserSubscriptions")
-  videos             Video[]        @relation("VideoOwner")
-  watchHistory       Video[]        @relation("WatchHistory")
+
+  subscribers   Subscription[] @relation("UserSubscribers")
+  subscriptions Subscription[] @relation("UserSubscriptions")
+  videos        Video[]        @relation("VideoOwner")
+  watchHistory  Video[]        @relation("WatchHistory")
+
+  comments  Comment[]
+  likes     Like[]
+  tweets    Tweet[]
+  playlists Playlist[]
 
   @@index([username])
   @@index([email])
 }
 
 model Video {
-  id                String   @id @default(uuid())
-  videoFile         String
-  thumbnail         String
-  title             String
-  description       String
-  duration          Int
-  views             Int      @default(0)
-  isPublished       Boolean  @default(true)
-  ownerId           String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id          String  @id @default(uuid())
+  videoFile   String
+  thumbnail   String
+  title       String
+  description String
+  duration    Int
+  views       Int     @default(0)
+  isPublished Boolean @default(true)
+
+  ownerId String
+  owner   User   @relation("VideoOwner", fields: [ownerId], references: [id])
+
+  watchedBy User[]     @relation("WatchHistory")
+  comments  Comment[]
+  likes     Like[]
+  playlists Playlist[] @relation("PlaylistVideos")
+
   thumbnailPublicId String
   videoPublicId     String
-  owner             User     @relation("VideoOwner", fields: [ownerId], references: [id])
-  watchedBy         User[]   @relation("WatchHistory")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([ownerId])
 }
 
 model Subscription {
-  id           String   @id @default(uuid())
+  id           String @id @default(uuid())
   subscriberId String
   channelId    String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  channel      User     @relation("UserSubscribers", fields: [channelId], references: [id])
-  subscriber   User     @relation("UserSubscriptions", fields: [subscriberId], references: [id])
+
+  channel    User @relation("UserSubscribers", fields: [channelId], references: [id])
+  subscriber User @relation("UserSubscriptions", fields: [subscriberId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([subscriberId, channelId])
+}
+
+model Comment {
+  id      String @id @default(uuid())
+  content String
+
+  videoId String
+  ownerId String
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  likes Like[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([videoId])
+  @@index([ownerId])
+}
+
+model Like {
+  id String @id @default(uuid())
+
+  likedById String
+  likedBy   User   @relation(fields: [likedById], references: [id], onDelete: Cascade)
+
+  videoId   String?
+  commentId String?
+  tweetId   String?
+
+  video   Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  tweet   Tweet?   @relation(fields: [tweetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([likedById, videoId])
+  @@unique([likedById, commentId])
+  @@unique([likedById, tweetId])
+}
+
+model Tweet {
+  id      String @id @default(uuid())
+  content String
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  likes Like[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+model Playlist {
+  id          String @id @default(uuid())
+  name        String
+  description String
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  videos Video[] @relation("PlaylistVideos")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
 }
 
 enum AuthProvider {

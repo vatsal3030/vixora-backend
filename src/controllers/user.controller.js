@@ -448,7 +448,7 @@ export const updateUserCoverImage = asyncHandler(async (req, res) => {
 
 
 export const getUserChannelProfile = asyncHandler(async (req, res) => {
-   const { username } = req.params;
+    const { username } = req.params;
     const channel = await prisma.user.findUnique({
         where: { username: username.toLowerCase() },
         select: {
