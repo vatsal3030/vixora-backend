@@ -316,7 +316,7 @@ export const chageCurrentPassword = asyncHandler(async (req, res) => {
 export const getCurrentUser = asyncHandler(async (req, res) => {
     return res.
         status(200).
-        json(200, req.user, "current user fetched successfully")
+        json(new ApiResponse(200, req.user, "current user fetched successfully"))
 
 })
 
@@ -448,6 +448,7 @@ export const updateUserCoverImage = asyncHandler(async (req, res) => {
 
 
 export const getUserChannelProfile = asyncHandler(async (req, res) => {
+   const { username } = req.params;
     const channel = await prisma.user.findUnique({
         where: { username: username.toLowerCase() },
         select: {
@@ -503,7 +504,7 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
     );
 })
 
-const getWatchHistory = asyncHandler(async (req, res) => {
+export const getWatchHistory = asyncHandler(async (req, res) => {
     const userId = req.user?.id
     if (!userId) throw new ApiError(404, "User not found")
 
@@ -536,15 +537,15 @@ const getWatchHistory = asyncHandler(async (req, res) => {
     })
 
     return res
-    .status(200)
-    .json(
-        new ApiResponse(
-            200,
-            user?.watchHistory || [] ,
-            "watchHistory fetched successfully"
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                user?.watchHistory || [],
+                "watchHistory fetched successfully"
 
+            )
         )
-    )
 })
 
 
