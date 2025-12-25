@@ -1,7 +1,7 @@
 import asyncHandler from "../utils/asyncHandler.js"
 import prisma from "../db/prisma.js";
-import ApiError from "../utils/ApiError";
-
+import ApiError from "../utils/ApiError.js";
+import ApiResponse from "../utils/ApiResponse.js";
 // 1. Get videoId from params
 // 2. Get userId from req.user
 // 3. Check video exists
