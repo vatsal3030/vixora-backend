@@ -25,6 +25,11 @@ model User {
   avatarPublicId     String?
   coverImagePublicId String?
 
+  // 🔥 Channel Info
+  channelDescription String?
+  channelLinks       Json?
+  channelCategory    String?
+
   subscribers           Subscription[] @relation("UserSubscribers")
   subscriptions         Subscription[] @relation("UserSubscriptions")
   videos                Video[]        @relation("VideoOwner")

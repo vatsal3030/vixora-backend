@@ -38,7 +38,6 @@ export const generateAccessAndRefreshToken = async (userId) => {
     }
 }
 
-
 export const registerUser = asyncHandler(async (req, res) => {
     // Validate request body
     // get user details from frontend
@@ -549,4 +548,20 @@ export const getWatchHistory = asyncHandler(async (req, res) => {
 })
 
 
+export const updateChannelDescription = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+    const { channelDescription, channelLinks, channelCategory } = req.body;
 
+    const updated = await prisma.user.update({
+        where: { id: userId },
+        data: {
+            channelDescription,
+            channelLinks,
+            channelCategory
+        }
+    });
+
+    res.status(200).json(
+        new ApiResponse(200, updated, "Channel updated successfully")
+    );
+});

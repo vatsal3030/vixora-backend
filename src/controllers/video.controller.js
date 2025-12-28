@@ -161,61 +161,67 @@ export const publishAVideo = asyncHandler(async (req, res) => {
 
     tagArray = tagArray.map(t => t.toLowerCase().trim());
 
-    // 4️⃣ Ensure tags exist
-    await prisma.tag.createMany({
-        data: tagArray.map(name => ({ name })),
-        skipDuplicates: true
-    });
+    const newVideo = await prisma.$transaction(async (tx) => {
+        // 1. Ensure tags exist
+        await tx.tag.createMany({
+            data: tagArray.map(name => ({ name })),
+            skipDuplicates: true
+        });
 
-    const tagRecords = await prisma.tag.findMany({
-        where: {
-            name: {
-                in: tagArray
-            }
-        }
-    });
+        const tagRecords = await tx.tag.findMany({
+            where: {
+                name: { in: tagArray }
+            },
+            select: { id: true }
+        });
 
-
-    // 5️⃣ Create video
-    const newVideo = await prisma.video.create({
-        data: {
-            title,
-            description,
-            duration,
-            isShort,
-            aspectRatio,
-            videoFile: videoFile.secure_url,
-            videoPublicId: videoFile.public_id,
-            thumbnail: thumbnail.secure_url,
-            thumbnailPublicId: thumbnail.public_id,
-            ownerId: req.user.id,
-            isPublished: true,
-            tags: {
-                create: tagRecords.map(tag => ({
-                    tagId: tag.id
-                }))
-            }
-        },
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            thumbnail: true,
-            duration: true,
-            views: true,
-            isPublished: true,
-            createdAt: true,
-            isShort: true,
-            aspectRatio: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    avatar: true
+        // 2. Create video
+        const video = await tx.video.create({
+            data: {
+                title,
+                description,
+                duration,
+                isShort,
+                aspectRatio,
+                videoFile: videoFile.secure_url,
+                videoPublicId: videoFile.public_id,
+                thumbnail: thumbnail.secure_url,
+                thumbnailPublicId: thumbnail.public_id,
+                ownerId: req.user.id,
+                isPublished: true,
+            },
+            select: {
+                id: true,
+                title: true,
+                description: true,
+                thumbnail: true,
+                duration: true,
+                views: true,
+                isPublished: true,
+                createdAt: true,
+                isShort: true,
+                aspectRatio: true,
+                owner: {
+                    select: {
+                        id: true,
+                        username: true,
+                        avatar: true
+                    }
                 }
             }
-        }
+        });
+
+        // 3. Attach tags
+        await tx.videoTag.createMany({
+            data: tagRecords.map(tag => ({
+                videoId: video.id,
+                tagId: tag.id
+            }))
+        });
+
+        return video;
     });
+
 
     if (newVideo.isPublished) {
         // 🔔 Notify subscribers who enabled notifications
@@ -399,54 +405,54 @@ export const updateVideo = asyncHandler(async (req, res) => {
 });
 
 export const deleteVideo = asyncHandler(async (req, res) => {
-  const { videoId } = req.params;
+    const { videoId } = req.params;
 
-  if (!videoId) {
-    throw new ApiError(400, "Video ID is required");
-  }
-
-  const existingVideo = await prisma.video.findUnique({
-    where: { id: videoId },
-    select: {
-      id: true,
-      ownerId: true,
-      videoPublicId: true,
-      thumbnailPublicId: true
+    if (!videoId) {
+        throw new ApiError(400, "Video ID is required");
     }
-  });
 
-  if (!existingVideo) {
-    throw new ApiError(404, "Video not found");
-  }
+    const existingVideo = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: {
+            id: true,
+            ownerId: true,
+            videoPublicId: true,
+            thumbnailPublicId: true
+        }
+    });
 
-  if (existingVideo.ownerId !== req.user.id) {
-    throw new ApiError(403, "You are not allowed to delete this video");
-  }
+    if (!existingVideo) {
+        throw new ApiError(404, "Video not found");
+    }
 
-  // ✅ Transaction-safe deletion
-  await prisma.$transaction(async (tx) => {
-    await tx.like.deleteMany({ where: { videoId } });
-    await tx.comment.deleteMany({ where: { videoId } });
-    await tx.videoTag.deleteMany({ where: { videoId } });
+    if (existingVideo.ownerId !== req.user.id) {
+        throw new ApiError(403, "You are not allowed to delete this video");
+    }
 
-    // delete video record LAST
-    await tx.video.delete({ where: { id: videoId } });
-  });
+    // ✅ Transaction-safe deletion
+    await prisma.$transaction(async (tx) => {
+        await tx.like.deleteMany({ where: { videoId } });
+        await tx.comment.deleteMany({ where: { videoId } });
+        await tx.videoTag.deleteMany({ where: { videoId } });
 
-  // ☁️ Cloudinary cleanup (outside transaction)
-  const videoDeleteResult = await deleteVideoOnCloudinary(existingVideo.videoPublicId);
-  if (!videoDeleteResult || videoDeleteResult.result !== "ok") {
-    console.warn("Video Cloudinary delete failed:", existingVideo.videoPublicId);
-  }
+        // delete video record LAST
+        await tx.video.delete({ where: { id: videoId } });
+    });
 
-  const thumbnailDeleteResult = await deleteImageOnCloudinary(existingVideo.thumbnailPublicId);
-  if (!thumbnailDeleteResult || thumbnailDeleteResult.result !== "ok") {
-    console.warn("Thumbnail Cloudinary delete failed:", existingVideo.thumbnailPublicId);
-  }
+    // ☁️ Cloudinary cleanup (outside transaction)
+    const videoDeleteResult = await deleteVideoOnCloudinary(existingVideo.videoPublicId);
+    if (!videoDeleteResult || videoDeleteResult.result !== "ok") {
+        console.warn("Video Cloudinary delete failed:", existingVideo.videoPublicId);
+    }
 
-  return res.status(200).json(
-    new ApiResponse(200, {}, "Video deleted successfully")
-  );
+    const thumbnailDeleteResult = await deleteImageOnCloudinary(existingVideo.thumbnailPublicId);
+    if (!thumbnailDeleteResult || thumbnailDeleteResult.result !== "ok") {
+        console.warn("Thumbnail Cloudinary delete failed:", existingVideo.thumbnailPublicId);
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Video deleted successfully")
+    );
 });
 
 export const togglePublishStatus = asyncHandler(async (req, res) => {

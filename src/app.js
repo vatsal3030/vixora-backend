@@ -33,6 +33,7 @@ import playlistRouter from "./routes/playlist.routes.js"
 import tweetRouter from "./routes/tweet.routes.js"
 import channelRouter from "./routes/channel.routes.js"
 import notificationRouter from "./routes/notification.routes.js"
+import dashboardRouter from "./routes/dashboard.routes.js"
 
 // route declarations
 app.use("/api/v1/users", userRouter)
@@ -44,5 +45,6 @@ app.use("/api/v1/playlists", playlistRouter)
 app.use("/api/v1/tweets", tweetRouter)
 app.use("/api/v1/channels", channelRouter)
 app.use("/api/v1/notifications", notificationRouter)
+app.use("/api/v1/dashboard", dashboardRouter)
 
 export default app;

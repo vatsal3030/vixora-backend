@@ -3,8 +3,6 @@ import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 
-
-
 export const getChannelInfo = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
     const userId = req.user?.id;
@@ -15,6 +13,11 @@ export const getChannelInfo = asyncHandler(async (req, res) => {
             id: true,
             username: true,
             avatar: true,
+            coverImage: true,
+            channelDescription: true,
+            channelLinks: true,
+            channelCategory: true,
+            createdAt: true,
             _count: {
                 select: {
                     subscribers: true,
@@ -47,8 +50,13 @@ export const getChannelInfo = asyncHandler(async (req, res) => {
             id: channel.id,
             username: channel.username,
             avatar: channel.avatar,
+            coverImage: channel.coverImage,
+            description: channel.channelDescription,
+            category: channel.channelCategory,
+            links: channel.channelLinks,
             subscribersCount: channel._count.subscribers,
             videosCount: channel._count.videos,
+            joinedAt: channel.createdAt,
             isSubscribed
         }, "Channel info fetched")
     );
@@ -204,5 +212,7 @@ export const getChannelTweets = asyncHandler(async (req, res) => {
         )
     );
 });
+
+
 
 

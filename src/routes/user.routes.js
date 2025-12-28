@@ -1,8 +1,19 @@
 import { Router } from "express";
-import { chageCurrentPassword, getCurrentUser, getUserChannelProfile, getWatchHistory, loginUser, logOutUser, refreshAccessToken, updateAccountDetails, updateUserAvatar, updateUserCoverImage } from "../controllers/user.controller.js";
+import {
+    registerUser,
+    updateChannelDescription,
+    chageCurrentPassword,
+    getCurrentUser,
+    getUserChannelProfile,
+    getWatchHistory,
+    loginUser, logOutUser,
+    refreshAccessToken,
+    updateAccountDetails,
+    updateUserAvatar,
+    updateUserCoverImage
+} from "../controllers/user.controller.js";
 import { upload } from "../middlewares/multer.middleware.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
-import { registerUser } from "../controllers/user.controller.js";
 const router = Router();
 
 router.route("/register").post(
@@ -32,6 +43,8 @@ router.route("/update-coverImage").patch(verifyJwt, upload.single("coverImage"),
 
 router.route("/u/:username").get(verifyJwt, getUserChannelProfile)
 router.route("/History").get(verifyJwt, getWatchHistory)
+
+router.route("/update-description").get(verifyJwt, updateChannelDescription)
 
 export default router;
 
