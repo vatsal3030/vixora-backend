@@ -2,6 +2,8 @@ import asyncHandler from "../utils/asyncHandler.js"
 import prisma from "../db/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
+// import upd from "../utils/updateFeedScrore.js"
+
 // 1. Get videoId from params
 // 2. Get userId from req.user
 // 3. Check video exists
@@ -12,6 +14,32 @@ import ApiResponse from "../utils/ApiResponse.js";
 //    ELSE:
 //       - create like
 //       - return "liked"
+
+
+export const updateVideoScore = async (videoId) => {
+    const video = await prisma.video.findUnique({
+        where: { id: videoId },
+        include: {
+            likes: true,
+            comments: true,
+            watchHistory: true
+        }
+    });
+
+    const score =
+        video.views * 0.3 +
+        video.likes.length * 0.4 +
+        video.comments.length * 0.2 +
+        video.watchHistory.length * 0.1;
+
+    await prisma.video.update({
+        where: { id: videoId },
+        data: {
+            popularityScore: score,
+            engagementScore: score / 10
+        }
+    });
+};
 
 
 export const toggleVideoLike = asyncHandler(async (req, res) => {
@@ -57,13 +85,15 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
     }
 
 
-
     await prisma.like.create({
         data: {
             likedById: req.user.id,
             videoId: videoId
         }
     })
+
+    await updateVideoScore(videoId)
+
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Video liked")
@@ -175,6 +205,9 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
             tweetId: tweetId,
         },
     });
+
+    await updateVideoScore(videoId)
+
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Tweet liked")

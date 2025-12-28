@@ -34,6 +34,10 @@ import tweetRouter from "./routes/tweet.routes.js"
 import channelRouter from "./routes/channel.routes.js"
 import notificationRouter from "./routes/notification.routes.js"
 import dashboardRouter from "./routes/dashboard.routes.js"
+import watchRouter from "./routes/watch.routes.js";
+import watchHistoryRouter from "./routes/watchHistory.routes.js";
+import feedRouter from "./routes/feed.routes.js";
+
 
 // route declarations
 app.use("/api/v1/users", userRouter)
@@ -46,5 +50,15 @@ app.use("/api/v1/tweets", tweetRouter)
 app.use("/api/v1/channels", channelRouter)
 app.use("/api/v1/notifications", notificationRouter)
 app.use("/api/v1/dashboard", dashboardRouter)
+app.use("/api/v1/watch", watchRouter);
+app.use("/api/v1/watch-history", watchHistoryRouter);
+app.use("/api/v1/feed",feedRouter);
+
+
+import path from "path";
+
+app.set("view engine", "ejs");
+app.set("views", path.join(process.cwd(), "src/views"));
+
 
 export default app;

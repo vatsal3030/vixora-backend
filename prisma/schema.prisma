@@ -33,8 +33,10 @@ model User {
   subscribers           Subscription[] @relation("UserSubscribers")
   subscriptions         Subscription[] @relation("UserSubscriptions")
   videos                Video[]        @relation("VideoOwner")
-  watchHistory          Video[]        @relation("WatchHistory")
+  // watchHistory          Video[]        @relation("WatchHistory")
   notificationsReceived Notification[] @relation("NotificationReceiver")
+
+  watchHistory WatchHistory[] // ✅ FIXED
 
   comments  Comment[]
   likes     Like[]
@@ -50,6 +52,8 @@ model Tag {
   name String @unique
 
   videos VideoTag[]
+
+  @@index([name])
 }
 
 model VideoTag {
@@ -71,8 +75,8 @@ model Video {
   duration    Int
   views       Int     @default(0)
   isPublished Boolean @default(true)
-
   isShort     Boolean @default(false)
+
   aspectRatio String? // "9:16" or "16:9"
 
   summary String? // AI-generated summary
@@ -82,7 +86,14 @@ model Video {
 
   tags VideoTag[] // ✅ ADD THIS
 
-  watchedBy User[]     @relation("WatchHistory")
+  shareCount Int @default(0)
+
+  // NEW (for ranking)
+  popularityScore Float @default(0)
+  engagementScore Float @default(0)
+
+  watchHistory WatchHistory[] // ✅ FIXED
+
   comments  Comment[]
   likes     Like[]
   playlists Playlist[] @relation("PlaylistVideos")
@@ -94,6 +105,35 @@ model Video {
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([isPublished])
+  @@index([isPublished, createdAt])
+  @@index([views])
+  @@index([popularityScore])
+  @@index([updatedAt])
+}
+
+model WatchHistory {
+  id      String @id @default(uuid())
+  userId  String
+  videoId String
+
+  progress      Int
+  duration      Int
+  completed     Boolean  @default(false)
+  watchCount    Int      @default(1)
+  lastWatchedAt DateTime @default(now())
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+  @@index([lastWatchedAt])
+  @@index([userId, updatedAt])
 }
 
 model Subscription {
@@ -108,6 +148,7 @@ model Subscription {
   updatedAt DateTime @updatedAt
 
   @@unique([subscriberId, channelId])
+  @@index([channelId])
 }
 
 model Comment {
@@ -205,7 +246,21 @@ model Notification {
 
   @@index([userId])
   @@index([videoId])
+  @@index([userId, isRead])
 }
+
+model FeedScore {
+  id        String   @id @default(uuid())
+  userId    String
+  videoId   String
+  score     Float
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+}
+
 
 enum AuthProvider {
   LOCAL

@@ -46,50 +46,43 @@ export const getDashboardOverview = asyncHandler(async (req, res) => {
       totalLikesOnTweet,
       totalComments,
       subscribers
-    }, "overview successfully fetched "));
+    }, "Dashboard overview fetched")
+  );
 });
 
 export const getAnalytics = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const period = req.query.period || "7d";
 
-  const daysMap = {
-    "7d": 7,
-    "30d": 30,
-    "90d": 90
-  };
-
+  const daysMap = { "7d": 7, "30d": 30, "90d": 90 };
   const days = daysMap[period] || 7;
 
   const fromDate = new Date();
   fromDate.setDate(fromDate.getDate() - days);
 
-  const videos = await prisma.video.findMany({
+  const data = await prisma.video.groupBy({
+    by: ["createdAt"],
     where: {
       ownerId: userId,
       createdAt: { gte: fromDate }
     },
-    select: {
-      createdAt: true,
-      views: true
-    }
+    _sum: { views: true },
+    orderBy: { createdAt: "asc" }
   });
 
-  const analytics = {};
+  const analytics = data.map(d => ({
+    date: d.createdAt.toISOString().split("T")[0],
+    views: d._sum.views || 0
+  }));
 
-  videos.forEach(v => {
-    const date = v.createdAt.toISOString().split("T")[0];
-    analytics[date] = (analytics[date] || 0) + v.views;
-  });
-
-  return res.status(200).json(
-    new ApiResponse(200, analytics, "analytics successfully fetched")
+  res.status(200).json(
+    new ApiResponse(200, analytics, "Analytics fetched")
   );
 });
 
 export const getTopVideos = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const limit = parseInt(req.query.limit) || 5;
+  const limit = Math.min(parseInt(req.query.limit) || 5, 20);
 
   const videos = await prisma.video.findMany({
     where: { ownerId: userId },
@@ -104,58 +97,61 @@ export const getTopVideos = asyncHandler(async (req, res) => {
     }
   });
 
-  return res.status(200).json(
-    new ApiResponse(200, videos, "top videos successfully fetched")
+  res.status(200).json(
+    new ApiResponse(200, videos, "Top videos fetched")
   );
-
 });
 
 export const getGrowthStats = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
-  const videos = await prisma.video.findMany({
+  const data = await prisma.video.groupBy({
+    by: ["createdAt"],
     where: { ownerId: userId },
-    select: { createdAt: true }
+    _count: { _all: true },
+    orderBy: { createdAt: "asc" }
   });
 
-  const growth = {};
+  const growth = data.map(d => ({
+    date: d.createdAt.toISOString().split("T")[0],
+    count: d._count._all
+  }));
 
-  videos.forEach(v => {
-    const date = v.createdAt.toISOString().split("T")[0];
-    growth[date] = (growth[date] || 0) + 1;
-  });
-
-  return res.status(200).json(
-    new ApiResponse(200, growth, "growth successfully fetched")
+  res.status(200).json(
+    new ApiResponse(200, growth, "Growth stats fetched")
   );
 });
 
 export const getInsights = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
-  const videos = await prisma.video.findMany({
-    where: { ownerId: userId },
-    select: {
-      views: true,
-      comments: true,
-      likes: true
-    }
-  });
+  const [videos, likes, comments] = await Promise.all([
+    prisma.video.aggregate({
+      where: { ownerId: userId },
+      _count: true,
+      _sum: { views: true }
+    }),
 
-  const totalVideos = videos.length;
-  const totalViews = videos.reduce((a, b) => a + b.views, 0);
-  const totalLikes = videos.reduce((a, b) => a + b.likes.length, 0);
-  const totalComments = videos.reduce((a, b) => a + b.comments.length, 0);
+    prisma.like.count({
+      where: { video: { ownerId: userId } }
+    }),
 
-  return res.status(200).json(
+    prisma.comment.count({
+      where: { video: { ownerId: userId } }
+    })
+  ]);
+
+  const totalVideos = videos._count;
+  const totalViews = videos._sum.views || 0;
+
+  res.status(200).json(
     new ApiResponse(200, {
       avgViews: totalVideos ? Math.round(totalViews / totalVideos) : 0,
+      avgLikes: likes ? Math.round(likes / totalVideos) : 0,
       engagementRate:
         totalViews > 0
-          ? ((totalLikes + totalComments) / totalViews).toFixed(2)
+          ? ((likes + comments) / totalViews).toFixed(2)
           : 0
-    }, "insights successfully fetched")
+    }, "Insights fetched")
   );
-
 });
-

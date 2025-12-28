@@ -4,6 +4,31 @@ import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import uploadOnCloudinary, { deleteImageOnCloudinary, deleteVideoOnCloudinary } from "../utils/cloudinary.js"
 
+export const updateVideoScore = async (videoId) => {
+    const video = await prisma.video.findUnique({
+        where: { id: videoId },
+        include: {
+            likes: true,
+            comments: true,
+            watchHistory: true
+        }
+    });
+
+    const score =
+        video.views * 0.3 +
+        video.likes.length * 0.4 +
+        video.comments.length * 0.2 +
+        video.watchHistory.length * 0.1;
+
+    await prisma.video.update({
+        where: { id: videoId },
+        data: {
+            popularityScore: score,
+            engagementScore: score / 10
+        }
+    });
+};
+
 
 export const getAllVideos = asyncHandler(async (req, res) => {
     let {
@@ -13,9 +38,8 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         sortBy = "createdAt",
         sortType = "desc",
         isShort = "false",
-        tags = "" // ✅ added
+        tags = ""
     } = req.query;
-
 
     page = Number(page);
     limit = Number(limit);
@@ -25,7 +49,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    // ✅ Base filter
     const whereClause = {
         isPublished: true
     };
@@ -34,7 +57,7 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         whereClause.isShort = isShort === "true";
     }
 
-    // 🔍 Search by title / description
+    // 🔍 Search filters
     if (query && query.trim().length > 0) {
         whereClause.OR = [
             { title: { contains: query, mode: "insensitive" } },
@@ -42,10 +65,9 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         ];
     }
 
-    // 🔖 Tag filtering (comma separated)
+    // 🔖 Tag filter
     if (tags) {
         const tagArray = tags.split(",").map(t => t.trim().toLowerCase());
-
         whereClause.tags = {
             some: {
                 tag: {
@@ -55,24 +77,13 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         };
     }
 
-    // Sorting
-    const allowedSortFields = ["createdAt", "views", "title"];
-    if (!allowedSortFields.includes(sortBy)) {
-        sortBy = "createdAt";
-    }
-
-    sortType = sortType === "asc" ? "asc" : "desc";
-
-    const allPublishedVideos = await prisma.video.findMany({
+    // 🧠 Base DB fetch (no score yet)
+    const videos = await prisma.video.findMany({
         where: whereClause,
-        orderBy: {
-            [sortBy]: sortType
-        },
-        skip,
-        take: limit,
         select: {
             id: true,
             title: true,
+            description: true,
             thumbnail: true,
             views: true,
             duration: true,
@@ -87,25 +98,63 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         }
     });
 
-    const totalVideos = await prisma.video.count({
-        where: whereClause
-    });
+    // 🔥 APPLY SCORE ONLY WHEN SEARCH EXISTS
+    let processedVideos = videos;
+
+    if (query && query.trim().length > 0) {
+        const q = query.toLowerCase();
+
+        processedVideos = videos.map(video => {
+            let score = 0;
+
+            // Title match
+            if (video.title.toLowerCase().includes(q)) score += 5;
+
+            // Description match
+            if (video.description?.toLowerCase().includes(q)) score += 3;
+
+            // Popularity
+            score += Math.min(video.views / 100, 5);
+
+            // Recency boost
+            const ageInDays =
+                (Date.now() - new Date(video.createdAt)) / (1000 * 60 * 60 * 24);
+            score += Math.max(0, 5 - ageInDays);
+
+            return { ...video, score };
+        });
+
+        processedVideos.sort((a, b) => b.score - a.score);
+    } else {
+        // Normal sorting (no search)
+        const allowedSortFields = ["createdAt", "views", "title"];
+        if (!allowedSortFields.includes(sortBy)) sortBy = "createdAt";
+
+        processedVideos.sort((a, b) => {
+            if (sortType === "asc") return a[sortBy] > b[sortBy] ? 1 : -1;
+            return a[sortBy] < b[sortBy] ? 1 : -1;
+        });
+    }
+
+    // Pagination AFTER scoring
+    const paginated = processedVideos.slice(skip, skip + limit);
 
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                videos: allPublishedVideos,
+                videos: paginated,
                 pagination: {
                     currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
+                    totalPages: Math.ceil(processedVideos.length / limit),
+                    totalVideos: processedVideos.length
                 }
             },
             "Videos fetched successfully"
         )
     );
 });
+
 
 export const publishAVideo = asyncHandler(async (req, res) => {
     const { title, description, tags = [] } = req.body;
@@ -314,6 +363,9 @@ export const getVideoById = asyncHandler(async (req, res) => {
         ...video,
         tags: video.tags.map(t => t.tag.name)
     };
+
+    await updateVideoScore(videoId)
+
 
     return res.status(200).json(
         new ApiResponse(200, formattedVideo, "Video fetched successfully")

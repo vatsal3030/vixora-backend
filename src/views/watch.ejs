@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+
+    <title><%= video.title %></title>
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="<%= video.title %>" />
+    <meta property="og:description" content="<%= video.description %>" />
+    <meta property="og:image" content="<%= video.thumbnail %>" />
+    <meta property="og:type" content="video.other" />
+    <meta property="og:url" content="https://yourdomain.com/watch/<%= video.id %>" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+
+</head>
+<body>
+    <h1><%= video.title %></h1>
+    <p>By <%= video.owner.username %></p>
+
+    <video controls width="800">
+        <source src="<%= video.videoFile %>" type="video/mp4" />
+    </video>
+
+    <p><%= video.description %></p>
+</body>
+</html>
