@@ -6,26 +6,21 @@ const PORT = process.env.PORT || 5000;
 
 async function startServer() {
   try {
-    // Connect to database
-    await prisma.$queryRaw`SELECT 1`;
+    await prisma.$connect();
     console.log("✅ Database connected");
 
     const server = app.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
     });
 
-    // Graceful shutdown
     process.on("SIGTERM", async () => {
-      console.log("\n🛑 Shutting down...");
-      server.close(async () => {
-        await prisma.$disconnect();
-        console.log("✅ Database disconnected");
-        process.exit(0);
-      });
+      console.log("🛑 Shutting down...");
+      await prisma.$disconnect();
+      server.close(() => process.exit(0));
     });
+
   } catch (error) {
-    console.error("❌ Failed to start server:", error.message);
-    await prisma.$disconnect();
+    console.error("❌ Server failed to start:", error);
     process.exit(1);
   }
 }
