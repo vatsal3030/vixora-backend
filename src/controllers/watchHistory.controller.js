@@ -91,8 +91,10 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
 
   sortType = sortType === "asc" ? "asc" : "desc";
 
+ 
+
   // ------------------------
-  // Filters
+  // Build video filter correctly
   // ------------------------
   const videoFilter = {
     ...(query && {
@@ -101,7 +103,9 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
         mode: "insensitive"
       }
     }),
-    ...(isShort === "true" && { duration: { lte: 60 } })
+    ...(isShort === "true" && {
+      duration: { lte: 60 }
+    })
   };
 
   // ------------------------
@@ -110,7 +114,9 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
   const history = await prisma.watchHistory.findMany({
     where: {
       userId,
-      video: videoFilter
+      video: {
+        is: videoFilter   // ✅ THIS IS THE FIX
+      }
     },
     orderBy: {
       [sortBy]: sortType
@@ -139,6 +145,7 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
       }
     }
   });
+
 
   const totalVideos = await prisma.watchHistory.count({
     where: {

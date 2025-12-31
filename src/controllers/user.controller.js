@@ -263,7 +263,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
 
 })
 
-export const chageCurrentPassword = asyncHandler(async (req, res) => {
+export const changeCurrentPassword = asyncHandler(async (req, res) => {
     const { oldPassword, newPassword } = req.body;
 
     // 1. Get user with password
@@ -504,48 +504,56 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
 })
 
 export const getWatchHistory = asyncHandler(async (req, res) => {
-    const userId = req.user?.id
-    if (!userId) throw new ApiError(404, "User not found")
+  const userId = req.user?.id;
+  if (!userId) throw new ApiError(404, "User not found");
 
-    const user = await prisma.user.findUnique({
-        where: { id: userId },
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      watchHistory: {
+        orderBy: {
+          createdAt: "desc",
+        },
         select: {
-            watchHistory: {
-                orderBy: {
-                    createdAt: "desc" // optional: latest watched first
-                },
+          id: true,
+          progress: true,
+          duration: true,
+          completed: true,
+          lastWatchedAt: true,
+
+          // ✅ Correct relation usage
+          video: {
+            select: {
+              id: true,
+              title: true,
+              description: true,
+              thumbnail: true,
+              duration: true,
+              views: true,
+              owner: {
                 select: {
-                    id: true,
-                    title: true,
-                    description: true,
-                    thumbnail: true,
-                    duration: true,
-                    views: true,
-                    createdAt: true,
-                    owner: {
-                        select: {
-                            id: true,
-                            fullName: true,
-                            username: true,
-                            avatar: true
-                        }
-                    }
+                  id: true,
+                  fullName: true,
+                  username: true,
+                  avatar: true
                 }
+              }
             }
+          }
         }
-    })
+      }
+    }
+  });
 
-    return res
-        .status(200)
-        .json(
-            new ApiResponse(
-                200,
-                user?.watchHistory || [],
-                "watchHistory fetched successfully"
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      user?.watchHistory || [],
+      "Watch history fetched successfully"
+    )
+  );
+});
 
-            )
-        )
-})
 
 
 export const updateChannelDescription = asyncHandler(async (req, res) => {

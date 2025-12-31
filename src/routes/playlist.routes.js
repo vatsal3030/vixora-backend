@@ -18,6 +18,13 @@ router.use(verifyJwt); // Apply verifyJWT middleware to all routes in this file
 router.route("/")
     .post(createPlaylist);
 
+// Get current user's playlists
+router.route("/user/me").get(async (req, res) => {
+    // Redirect to getUserPlaylists with current user's ID
+    req.params.userId = req.user.id;
+    return getUserPlaylists(req, res);
+});
+
 router.route("/:playlistId")
     .get(getPlaylistById)
     .patch(updatePlaylist)

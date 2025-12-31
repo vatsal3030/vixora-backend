@@ -426,13 +426,16 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
         select: {
             id: true,
             title: true,
+            description: true,
             thumbnail: true,
+            videoFile: true,
             duration: true,
             views: true,
             createdAt: true,
             owner: {
                 select: {
                     id: true,
+                    fullName: true,
                     username: true,
                     avatar: true
                 }

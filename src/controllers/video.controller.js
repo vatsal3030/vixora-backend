@@ -77,82 +77,94 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         };
     }
 
-    // 🧠 Base DB fetch (no score yet)
-    const videos = await prisma.video.findMany({
-        where: whereClause,
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            thumbnail: true,
-            views: true,
-            duration: true,
-            createdAt: true,
-            owner: {
+    // 🔥 APPLY SCORE ONLY WHEN SEARCH EXISTS
+    let videos;
+    let totalCount;
+
+    if (!query || query.trim() === "") {
+        // ✅ DATABASE-LEVEL PAGINATION
+        [videos, totalCount] = await Promise.all([
+            prisma.video.findMany({
+                where: whereClause,
+                skip,
+                take: limit,
+                orderBy: {
+                    [sortBy]: sortType
+                },
                 select: {
                     id: true,
-                    username: true,
-                    avatar: true
+                    title: true,
+                    description: true,
+                    thumbnail: true,
+                    views: true,
+                    duration: true,
+                    createdAt: true,
+                    owner: {
+                        select: {
+                            id: true,
+                            username: true,
+                            avatar: true
+                        }
+                    }
+                }
+            }),
+            prisma.video.count({ where: whereClause })
+        ]);
+    } else {
+        // 🔥 SEARCH MODE (in-memory scoring)
+        const allVideos = await prisma.video.findMany({
+            where: whereClause,
+            select: {
+                id: true,
+                title: true,
+                description: true,
+                thumbnail: true,
+                views: true,
+                duration: true,
+                createdAt: true,
+                owner: {
+                    select: {
+                        id: true,
+                        username: true,
+                        avatar: true
+                    }
                 }
             }
-        }
-    });
+        });
 
-    // 🔥 APPLY SCORE ONLY WHEN SEARCH EXISTS
-    let processedVideos = videos;
-
-    if (query && query.trim().length > 0) {
         const q = query.toLowerCase();
 
-        processedVideos = videos.map(video => {
+        const scored = allVideos.map(v => {
             let score = 0;
+            if (v.title.toLowerCase().includes(q)) score += 5;
+            if (v.description?.toLowerCase().includes(q)) score += 3;
+            score += Math.min(v.views / 100, 5);
+            const age = (Date.now() - new Date(v.createdAt)) / 86400000;
+            score += Math.max(0, 5 - age);
 
-            // Title match
-            if (video.title.toLowerCase().includes(q)) score += 5;
-
-            // Description match
-            if (video.description?.toLowerCase().includes(q)) score += 3;
-
-            // Popularity
-            score += Math.min(video.views / 100, 5);
-
-            // Recency boost
-            const ageInDays =
-                (Date.now() - new Date(video.createdAt)) / (1000 * 60 * 60 * 24);
-            score += Math.max(0, 5 - ageInDays);
-
-            return { ...video, score };
+            return { ...v, score };
         });
 
-        processedVideos.sort((a, b) => b.score - a.score);
-    } else {
-        // Normal sorting (no search)
-        const allowedSortFields = ["createdAt", "views", "title"];
-        if (!allowedSortFields.includes(sortBy)) sortBy = "createdAt";
+        scored.sort((a, b) => b.score - a.score);
 
-        processedVideos.sort((a, b) => {
-            if (sortType === "asc") return a[sortBy] > b[sortBy] ? 1 : -1;
-            return a[sortBy] < b[sortBy] ? 1 : -1;
-        });
+        totalCount = scored.length;
+        videos = scored.slice(skip, skip + limit);
     }
 
+
     // Pagination AFTER scoring
-    const paginated = processedVideos.slice(skip, skip + limit);
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                videos: paginated,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(processedVideos.length / limit),
-                    totalVideos: processedVideos.length
-                }
-            },
-            "Videos fetched successfully"
-        )
+        new ApiResponse(200, {
+            videos,
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(totalCount / limit),
+                totalVideos: totalCount
+            }
+        }, "Videos fetched successfully")
     );
+
 });
 
 
