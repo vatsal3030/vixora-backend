@@ -10,32 +10,37 @@ export const saveWatchProgress = asyncHandler(async (req, res) => {
   const userId = req.user.id;
   const { videoId, progress, duration } = req.body;
 
+  console.log('Saving watch progress:', { userId, videoId, progress, duration });
+
   if (!videoId || progress == null) {
     throw new ApiError(400, "Video ID and progress are required");
   }
 
+  const completed = progress >= 95; // Consider 95% as completed
 
-  const completed = duration && progress >= duration * 0.95;
-
-  await prisma.watchHistory.upsert({
+  const result = await prisma.watchHistory.upsert({
     where: {
       userId_videoId: { userId, videoId }
     },
     update: {
       progress,
-      duration,
-      completed
+      duration: duration || 0,
+      completed,
+      lastWatchedAt: new Date()
     },
     create: {
       userId,
       videoId,
       progress,
-      duration,
-      completed
+      duration: duration || 0,
+      completed,
+      lastWatchedAt: new Date()
     }
   });
 
-  return res.json(new ApiResponse(200, {}, "Progress saved"));
+  console.log('Watch progress saved:', result);
+
+  return res.json(new ApiResponse(200, result, "Progress saved"));
 });
 
 /**
@@ -60,6 +65,8 @@ export const getWatchProgress = asyncHandler(async (req, res) => {
 
 export const getContinueWatching = asyncHandler(async (req, res) => {
   const userId = req.user.id;
+
+  console.log('Fetching continue watching for user:', userId);
 
   let {
     page = "1",
@@ -90,8 +97,6 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
   }
 
   sortType = sortType === "asc" ? "asc" : "desc";
-
- 
 
   // ------------------------
   // Build video filter correctly
@@ -134,10 +139,12 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
           thumbnail: true,
           duration: true,
           views: true,
+          createdAt: true,
           owner: {
             select: {
               id: true,
               username: true,
+              fullName: true,
               avatar: true
             }
           }
@@ -146,14 +153,18 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
     }
   });
 
+  console.log('Found watch history entries:', history.length);
 
   const totalVideos = await prisma.watchHistory.count({
     where: {
       userId,
-      completed: false,
-      video: videoFilter
+      video: {
+        is: videoFilter
+      }
     }
   });
+
+  console.log('Total watch history count:', totalVideos);
 
   return res.status(200).json(
     new ApiResponse(

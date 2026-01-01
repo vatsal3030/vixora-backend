@@ -556,6 +556,62 @@ export const getWatchHistory = asyncHandler(async (req, res) => {
 
 
 
+export const getUserById = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    
+    if (!userId) {
+        throw new ApiError(400, "User ID is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+            id: true,
+            fullName: true,
+            username: true,
+            avatar: true,
+            coverImage: true,
+            email: true,
+            description: true,
+            createdAt: true,
+            _count: {
+                select: {
+                    subscribers: true,
+                    subscriptions: true
+                }
+            }
+        },
+    });
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    // Check if current user is subscribed to this channel
+    const isSubscribed = req.user?.id ? await prisma.subscription.findUnique({
+        where: {
+            subscriberId_channelId: {
+                subscriberId: req.user.id,
+                channelId: userId,
+            },
+        },
+    }) : null;
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                ...user,
+                subscribersCount: user._count.subscribers,
+                subscriptionsCount: user._count.subscriptions,
+                isSubscribed: Boolean(isSubscribed),
+                _count: undefined
+            },
+            "User fetched successfully"
+        )
+    );
+});
+
 export const updateChannelDescription = asyncHandler(async (req, res) => {
     const userId = req.user.id;
     const { channelDescription, channelLinks, channelCategory } = req.body;

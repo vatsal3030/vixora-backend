@@ -146,7 +146,7 @@ export const getPlaylistById = asyncHandler(async (req, res) => {
 
 
 export const addVideoToPlaylist = asyncHandler(async (req, res) => {
-    const { playlistId, videoId } = req.params;
+    const { videoId, playlistId } = req.params;
 
     if (!playlistId || !videoId) {
         throw new ApiError(400, "playlistId and videoId are required");
@@ -206,7 +206,7 @@ export const addVideoToPlaylist = asyncHandler(async (req, res) => {
 
 
 export const removeVideoFromPlaylist = asyncHandler(async (req, res) => {
-    const { playlistId, videoId } = req.params;
+    const { videoId, playlistId } = req.params;
 
     if (!playlistId || !videoId) {
         throw new ApiError(400, "playlistId and videoId are required");

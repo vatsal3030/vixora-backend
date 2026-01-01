@@ -5,6 +5,7 @@ import {
     changeCurrentPassword,
     getCurrentUser,
     getUserChannelProfile,
+    getUserById,
     getWatchHistory,
     loginUser, logOutUser,
     refreshAccessToken,
@@ -42,6 +43,7 @@ router.route("/update-avatar").patch(verifyJwt, upload.single("avatar"), updateU
 router.route("/update-coverImage").patch(verifyJwt, upload.single("coverImage"), updateUserCoverImage)
 
 router.route("/u/:username").get(verifyJwt, getUserChannelProfile)
+router.route("/id/:userId").get(verifyJwt, getUserById)
 router.route("/History").get(verifyJwt, getWatchHistory)
 
 router.route("/update-description").patch(verifyJwt, updateChannelDescription)

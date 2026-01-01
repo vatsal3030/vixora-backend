@@ -42,6 +42,14 @@ export const createTweet = asyncHandler(async (req, res) => {
             content: true,
             image: true,
             createdAt: true,
+            owner: {
+                select: {
+                    id: true,
+                    username: true,
+                    fullName: true,
+                    avatar: true,
+                },
+            },
         },
     });
 
@@ -52,7 +60,7 @@ export const createTweet = asyncHandler(async (req, res) => {
 
 export const getUserTweets = asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    let { page = "1", limit = "10" } = req.query;
+    let { page = "1", limit = "10", sortBy = "createdAt", sortType = "desc" } = req.query;
 
     if (!userId) {
         throw new ApiError(400, "User ID is required");
@@ -71,7 +79,7 @@ export const getUserTweets = asyncHandler(async (req, res) => {
             ownerId: userId,
             isDeleted: false,
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { [sortBy]: sortType },
         skip,
         take: limit,
         select: {
@@ -79,6 +87,14 @@ export const getUserTweets = asyncHandler(async (req, res) => {
             content: true,
             image: true,
             createdAt: true,
+            owner: {
+                select: {
+                    id: true,
+                    username: true,
+                    fullName: true,
+                    avatar: true,
+                },
+            },
             _count: {
                 select: {
                     likes: true,
@@ -95,27 +111,18 @@ export const getUserTweets = asyncHandler(async (req, res) => {
         },
     });
 
-    await prisma.tweet.deleteMany({
-        where: {
-            isDeleted: true,
-            updatedAt: {
-                lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-            },
-        },
-    });
-
+    // Format tweets with like counts
+    const formattedTweets = tweets.map(tweet => ({
+        ...tweet,
+        likesCount: tweet._count.likes,
+        commentsCount: tweet._count.comments,
+        _count: undefined
+    }));
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                tweets,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalTweets / limit),
-                    totalTweets,
-                },
-            },
+            formattedTweets,
             "Tweets fetched successfully"
         )
     );

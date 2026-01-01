@@ -41,6 +41,8 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         tags = ""
     } = req.query;
 
+    const userId = req.user?.id; // Get current user ID for progress
+
     page = Number(page);
     limit = Number(limit);
 
@@ -82,7 +84,7 @@ export const getAllVideos = asyncHandler(async (req, res) => {
     let totalCount;
 
     if (!query || query.trim() === "") {
-        // ✅ DATABASE-LEVEL PAGINATION
+        // ✅ DATABASE-LEVEL PAGINATION WITH PROGRESS
         [videos, totalCount] = await Promise.all([
             prisma.video.findMany({
                 where: whereClause,
@@ -103,15 +105,27 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                         select: {
                             id: true,
                             username: true,
+                            fullName: true,
                             avatar: true
                         }
-                    }
+                    },
+                    // Include watch progress for current user
+                    ...(userId && {
+                        watchHistory: {
+                            where: { userId },
+                            select: {
+                                progress: true,
+                                duration: true,
+                                lastWatchedAt: true
+                            }
+                        }
+                    })
                 }
             }),
             prisma.video.count({ where: whereClause })
         ]);
     } else {
-        // 🔥 SEARCH MODE (in-memory scoring)
+        // 🔥 SEARCH MODE (in-memory scoring) WITH PROGRESS
         const allVideos = await prisma.video.findMany({
             where: whereClause,
             select: {
@@ -126,9 +140,21 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                     select: {
                         id: true,
                         username: true,
+                        fullName: true,
                         avatar: true
                     }
-                }
+                },
+                // Include watch progress for current user
+                ...(userId && {
+                    watchHistory: {
+                        where: { userId },
+                        select: {
+                            progress: true,
+                            duration: true,
+                            lastWatchedAt: true
+                        }
+                    }
+                })
             }
         });
 
@@ -151,12 +177,23 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         videos = scored.slice(skip, skip + limit);
     }
 
-
-    // Pagination AFTER scoring
+    // Transform videos to include progress data
+    const videosWithProgress = videos.map(video => {
+        const progress = video.watchHistory?.[0];
+        return {
+            ...video,
+            progress: progress ? {
+                watchedDuration: Math.round((progress.progress / 100) * progress.duration) || 0,
+                percentage: progress.progress || 0,
+                lastWatchedAt: progress.lastWatchedAt
+            } : null,
+            watchHistory: undefined // Remove from response
+        };
+    });
 
     return res.status(200).json(
         new ApiResponse(200, {
-            videos,
+            videos: videosWithProgress,
             pagination: {
                 currentPage: page,
                 totalPages: Math.ceil(totalCount / limit),
@@ -164,7 +201,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
             }
         }, "Videos fetched successfully")
     );
-
 });
 
 
@@ -340,9 +376,25 @@ export const getVideoById = asyncHandler(async (req, res) => {
                 select: {
                     id: true,
                     username: true,
-                    avatar: true
+                    fullName: true,
+                    avatar: true,
+                    _count: {
+                        select: {
+                            subscribers: true
+                        }
+                    }
                 }
             },
+            _count: {
+                select: {
+                    likes: true,
+                    comments: true
+                }
+            },
+            likes: userId ? {
+                where: { userId },
+                select: { id: true }
+            } : false,
             tags: {
                 select: {
                     tag: {
@@ -362,6 +414,20 @@ export const getVideoById = asyncHandler(async (req, res) => {
         throw new ApiError(403, "This video is not published");
     }
 
+    // Check if user is subscribed to channel
+    let isSubscribed = false;
+    if (userId && video.owner.id !== userId) {
+        const subscription = await prisma.subscription.findUnique({
+            where: {
+                subscriberId_channelId: {
+                    subscriberId: userId,
+                    channelId: video.owner.id
+                }
+            }
+        });
+        isSubscribed = !!subscription;
+    }
+
     // 👁️ Increase view count (only if viewer is not owner)
     if (video.owner.id !== userId) {
         await prisma.video.update({
@@ -370,10 +436,21 @@ export const getVideoById = asyncHandler(async (req, res) => {
         });
     }
 
-    // Format tags
+    // Format response with interaction data
     const formattedVideo = {
         ...video,
-        tags: video.tags.map(t => t.tag.name)
+        likesCount: video._count.likes,
+        commentsCount: video._count.comments,
+        isLiked: userId ? video.likes.length > 0 : false,
+        owner: {
+            ...video.owner,
+            subscribersCount: video.owner._count.subscribers,
+            isSubscribed,
+            _count: undefined
+        },
+        tags: video.tags.map(t => t.tag.name),
+        _count: undefined,
+        likes: undefined
     };
 
     await updateVideoScore(videoId)
@@ -563,6 +640,86 @@ export const togglePublishStatus = asyncHandler(async (req, res) => {
     );
 });
 
+export const getUserVideos = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    let { page = "1", limit = "10", query = "", sortBy = "createdAt", sortType = "desc", isShort } = req.query;
+
+    if (!userId) {
+        throw new ApiError(400, "User ID is required");
+    }
+
+    page = Number(page);
+    limit = Number(limit);
+
+    if (isNaN(page) || page < 1) page = 1;
+    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
+
+    const skip = (page - 1) * limit;
+
+    const whereClause = {
+        ownerId: userId,
+        isPublished: true,
+    };
+
+    if (query && query.trim().length > 0) {
+        whereClause.title = {
+            contains: query,
+            mode: "insensitive",
+        };
+    }
+
+    if (isShort !== undefined) {
+        whereClause.isShort = isShort === "true";
+    }
+
+    const videos = await prisma.video.findMany({
+        where: whereClause,
+        orderBy: {
+            [sortBy]: sortType === "asc" ? "asc" : "desc",
+        },
+        skip,
+        take: limit,
+        select: {
+            id: true,
+            title: true,
+            description: true,
+            thumbnail: true,
+            videoFile: true,
+            duration: true,
+            views: true,
+            isShort: true,
+            createdAt: true,
+            owner: {
+                select: {
+                    id: true,
+                    username: true,
+                    fullName: true,
+                    avatar: true,
+                },
+            },
+        },
+    });
+
+    const totalVideos = await prisma.video.count({
+        where: whereClause,
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                videos,
+                pagination: {
+                    currentPage: page,
+                    totalPages: Math.ceil(totalVideos / limit),
+                    totalVideos,
+                },
+            },
+            "User videos fetched successfully"
+        )
+    );
+});
+
 export const getMyVideos = asyncHandler(async (req, res) => {
     let {
         page = "1",
@@ -667,7 +824,7 @@ export const getMyVideos = asyncHandler(async (req, res) => {
                     totalVideos
                 }
             },
-            "Shorts fetched successfully"
+            "My videos fetched successfully"
         )
     );
 });

@@ -156,7 +156,13 @@ export const getSubscribedChannels = asyncHandler(async (req, res) => {
                 select: {
                     id: true,
                     username: true,
+                    fullName: true,
                     avatar: true,
+                    _count: {
+                        select: {
+                            subscribers: true
+                        }
+                    }
                 },
             },
             createdAt: true,
@@ -166,7 +172,9 @@ export const getSubscribedChannels = asyncHandler(async (req, res) => {
 
     const channelList = subscriptions.map(sub => ({
         ...sub.channel,
+        subscribersCount: sub.channel._count.subscribers,
         subscribedAt: sub.createdAt,
+        _count: undefined
     }));
 
     return res.status(200).json(

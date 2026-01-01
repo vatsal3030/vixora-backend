@@ -439,12 +439,48 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                     username: true,
                     avatar: true
                 }
+            },
+            _count: {
+                select: {
+                    likes: true,
+                    comments: true
+                }
+            },
+            likes: userId ? {
+                where: { userId },
+                select: { id: true }
+            } : false,
+            comments: {
+                take: 5,
+                orderBy: { createdAt: 'desc' },
+                select: {
+                    id: true,
+                    content: true,
+                    createdAt: true,
+                    owner: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            avatar: true
+                        }
+                    }
+                }
             }
         }
     });
 
+    // Format shorts with interaction data
+    const formattedShorts = shorts.map(short => ({
+        ...short,
+        likesCount: short._count.likes,
+        commentsCount: short._count.comments,
+        isLiked: userId ? short.likes.length > 0 : false,
+        _count: undefined,
+        likes: undefined
+    }));
+
     // Attach watch progress
-    const shortsWithProgress = await attachWatchProgress(shorts, userId);
+    const shortsWithProgress = await attachWatchProgress(formattedShorts, userId);
 
     // Count for pagination
     const totalShorts = await prisma.video.count({

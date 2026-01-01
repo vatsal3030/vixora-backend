@@ -6,6 +6,7 @@ import {
     getVideoById,
     deleteVideo,
     getMyVideos,
+    getUserVideos,
     publishAVideo,
     togglePublishStatus,
     updateVideo
@@ -18,6 +19,7 @@ router.use(verifyJwt);
 // 🔹 GET ALL VIDEOS
 router.route("/").get(getAllVideos);
 router.route("/me").get(getMyVideos);
+router.route("/user/:userId").get(getUserVideos);
 
 // 🔹 PUBLISH VIDEO
 router.route("/").
