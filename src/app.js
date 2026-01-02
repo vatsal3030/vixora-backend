@@ -19,6 +19,7 @@ import dashboardRouter from "./routes/dashboard.routes.js";
 import watchRouter from "./routes/watch.routes.js";
 import watchHistoryRouter from "./routes/watchHistory.routes.js";
 import feedRouter from "./routes/feed.routes.js";
+import settingRouter from "./routes/settings.routes.js";
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use("/api/v1/dashboard", dashboardRouter);
 app.use("/api/v1/watch", watchRouter);
 app.use("/api/v1/watch-history", watchHistoryRouter);
 app.use("/api/v1/feed", feedRouter);
+app.use("/api/v1/settings", settingRouter);
 
 /* ---------- 404 HANDLER ---------- */
 app.use((req, res) => {

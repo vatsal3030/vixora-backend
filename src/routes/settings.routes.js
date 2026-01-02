@@ -1,23 +1,22 @@
 import { Router } from "express";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 import {
-  getSettings,
-  updateSettings,
-  resetSettings
+  getUserSettings,
+  updateUserSettings,
+  resetUserSettings
 } from "../controllers/settings.controller.js";
 
 const router = Router();
 
-// All routes are protected
 router.use(verifyJwt);
 
-// Get user settings
-router.get("/", getSettings);
+// GET current user settings
+router.get("/", getUserSettings);
 
-// Update user settings
-router.patch("/", updateSettings);
+// UPDATE settings (partial allowed)
+router.patch("/", updateUserSettings);
 
-// Reset settings to default
-router.post("/reset", resetSettings);
+// RESET to defaults
+router.post("/reset", resetUserSettings);
 
 export default router;

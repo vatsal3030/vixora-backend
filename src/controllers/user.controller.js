@@ -58,7 +58,6 @@ export const registerUser = asyncHandler(async (req, res) => {
     }
 
     const { fullName, email, username, password } = parsed.data;
-    // console.log({ fullName, email, username, password })
 
     if ([fullName, email, username, password].some((field) =>
         field?.trim().length === 0)) {

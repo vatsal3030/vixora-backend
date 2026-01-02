@@ -7,21 +7,26 @@ datasource db {
 }
 
 model User {
-  id                 String       @id @default(uuid())
-  username           String?      @unique
-  email              String?      @unique
-  fullName           String
-  avatar             String?
-  coverImage         String?
-  password           String?
-  refreshToken       String?
-  authProvider       AuthProvider @default(LOCAL)
-  providerId         String?
-  emailVerified      Boolean      @default(false)
-  otpHash            String?
-  otpExpiresAt       DateTime?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id       String  @id @default(uuid())
+  username String? @unique
+  email    String? @unique
+  fullName String
+
+  avatar     String?
+  coverImage String?
+
+  password     String?
+  refreshToken String?
+  authProvider AuthProvider @default(LOCAL)
+  providerId   String?
+
+  emailVerified Boolean   @default(false)
+  otpHash       String?
+  otpExpiresAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   avatarPublicId     String?
   coverImagePublicId String?
 
@@ -30,18 +35,24 @@ model User {
   channelLinks       Json?
   channelCategory    String?
 
-  subscribers           Subscription[] @relation("UserSubscribers")
-  subscriptions         Subscription[] @relation("UserSubscriptions")
-  videos                Video[]        @relation("VideoOwner")
-  // watchHistory          Video[]        @relation("WatchHistory")
-  notificationsReceived Notification[] @relation("NotificationReceiver")
+  settings UserSettings?
 
-  watchHistory WatchHistory[] // ✅ FIXED
+  subscribers   Subscription[] @relation("UserSubscribers")
+  subscriptions Subscription[] @relation("UserSubscriptions")
 
-  comments  Comment[]
-  likes     Like[]
-  tweets    Tweet[]
-  playlists Playlist[]
+  videos Video[] @relation("VideoOwner")
+
+  watchHistory WatchHistory[] @relation("UserWatchHistory")
+
+  sentNotifications Notification[] @relation("NotificationSender")
+
+  notifications Notification[] @relation("UserNotifications")
+
+  comments   Comment[]
+  likes      Like[]
+  tweets     Tweet[]
+  playlists  Playlist[]
+  feedScores FeedScore[]
 
   @@index([username])
   @@index([email])
@@ -78,31 +89,30 @@ model Video {
   isShort     Boolean @default(false)
 
   aspectRatio String? // "9:16" or "16:9"
-
-  summary String? // AI-generated summary
+  summary     String? // AI-generated summary
 
   ownerId String
   owner   User   @relation("VideoOwner", fields: [ownerId], references: [id])
 
   tags VideoTag[] // ✅ ADD THIS
 
-  shareCount Int @default(0)
+  watchHistory WatchHistory[] @relation("VideoWatchHistory")
 
-  // NEW (for ranking)
+  playlistVideos PlaylistVideo[]
+
+  comments Comment[]
+  likes    Like[]
+
+  shareCount      Int   @default(0)
   popularityScore Float @default(0)
   engagementScore Float @default(0)
-
-  watchHistory WatchHistory[] // ✅ FIXED
-
-  comments  Comment[]
-  likes     Like[]
-  playlists Playlist[] @relation("PlaylistVideos")
 
   thumbnailPublicId String
   videoPublicId     String
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  feedScores FeedScore[]
 
   @@index([ownerId])
   @@index([isPublished])
@@ -110,6 +120,7 @@ model Video {
   @@index([views])
   @@index([popularityScore])
   @@index([updatedAt])
+  @@index([createdAt])
 }
 
 model WatchHistory {
@@ -126,8 +137,8 @@ model WatchHistory {
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user  User  @relation("UserWatchHistory", fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation("VideoWatchHistory", fields: [videoId], references: [id], onDelete: Cascade)
 
   @@unique([userId, videoId])
   @@index([userId])
@@ -170,6 +181,8 @@ model Comment {
 
   @@index([videoId])
   @@index([ownerId])
+  @@index([updatedAt])
+  @@index([createdAt])
 }
 
 model Like {
@@ -213,6 +226,8 @@ model Tweet {
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([updatedAt])
+  @@index([createdAt])
 }
 
 model Playlist {
@@ -224,7 +239,7 @@ model Playlist {
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  videos Video[] @relation("PlaylistVideos")
+  videos PlaylistVideo[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -232,21 +247,44 @@ model Playlist {
   @@index([ownerId])
 }
 
+model PlaylistVideo {
+  playlistId String
+  videoId    String
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@id([playlistId, videoId])
+}
+
 model Notification {
   id String @id @default(uuid())
 
-  userId  String // receiver
-  videoId String // reference only (no relation)
+  userId   String
+  senderId String?
+
+  user   User  @relation("UserNotifications", fields: [userId], references: [id])
+  sender User? @relation("NotificationSender", fields: [senderId], references: [id])
+
+  type    NotificationType
+  title   String
+  message String
+  data    Json?
 
   isRead    Boolean  @default(false)
-  notifyAll Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  user User @relation("NotificationReceiver", fields: [userId], references: [id])
-
   @@index([userId])
-  @@index([videoId])
   @@index([userId, isRead])
+}
+
+enum NotificationType {
+  COMMENT
+  LIKE
+  SUBSCRIPTION
+  UPLOAD
+  MENTION
+  SYSTEM
 }
 
 model FeedScore {
@@ -257,14 +295,60 @@ model FeedScore {
   reason    String?
   createdAt DateTime @default(now())
 
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
   @@unique([userId, videoId])
   @@index([userId])
 }
-
 
 enum AuthProvider {
   LOCAL
   GOOGLE
   GITHUB
   FACEBOOK
+}
+
+model UserSettings {
+  id     String @id @default(uuid())
+  userId String @unique
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Privacy Settings
+  profileVisibility ProfileVisibility @default(PUBLIC)
+  showSubscriptions Boolean           @default(true)
+  showLikedVideos   Boolean           @default(true)
+  allowComments     Boolean           @default(true)
+  allowMentions     Boolean           @default(true)
+
+  // Notification Settings
+  emailNotifications        Boolean @default(true)
+  commentNotifications      Boolean @default(true)
+  subscriptionNotifications Boolean @default(true)
+  systemAnnouncements       Boolean @default(true)
+
+  // Playback Settings
+  autoplayNext         Boolean @default(true)
+  defaultPlaybackSpeed Float   @default(1.0)
+  saveWatchHistory     Boolean @default(true)
+
+  // Display Settings
+  showProgressBar   Boolean @default(true)
+  showViewCount     Boolean @default(true)
+  showVideoDuration Boolean @default(true)
+  showChannelName   Boolean @default(true)
+
+  // Content Settings
+  personalizeRecommendations Boolean @default(true)
+  showTrending              Boolean @default(true)
+  hideShorts                Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  PRIVATE
 }

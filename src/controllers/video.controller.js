@@ -392,7 +392,7 @@ export const getVideoById = asyncHandler(async (req, res) => {
                 }
             },
             likes: userId ? {
-                where: { userId },
+                where: { likedById:userId },
                 select: { id: true }
             } : false,
             tags: {

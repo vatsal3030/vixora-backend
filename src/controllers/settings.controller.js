@@ -1,78 +1,158 @@
-import { asyncHandler } from "../utils/asyncHandler.js";
-import { ApiError } from "../utils/ApiError.js";
-import { ApiResponse } from "../utils/ApiResponse.js";
-import { User } from "../models/user.model.js";
+import prisma from "../db/prisma.js";
+import ApiError from "../utils/ApiError.js";
+import ApiResponse from "../utils/ApiResponse.js";
+import asyncHandler from "../utils/asyncHandler.js";
 
-// Get user settings
-const getSettings = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user?._id).select("settings");
-  
-  if (!user) {
-    throw new ApiError(404, "User not found");
-  }
+/**
+ * GET SETTINGS
+ */
+export const getUserSettings = asyncHandler(async (req, res) => {
+  let settings = await prisma.userSettings.findUnique({
+    where: { userId: req.user.id }
+  });
 
-  return res
-    .status(200)
-    .json(new ApiResponse(200, user.settings || {}, "Settings retrieved successfully"));
-});
-
-// Update user settings
-const updateSettings = asyncHandler(async (req, res) => {
-  const updates = req.body;
-  
-  const user = await User.findByIdAndUpdate(
-    req.user?._id,
-    {
-      $set: {
-        "settings": {
-          ...req.user.settings,
-          ...updates
-        }
+  // Create default settings if they don't exist
+  if (!settings) {
+    settings = await prisma.userSettings.create({
+      data: {
+        userId: req.user.id,
+        profileVisibility: "PUBLIC",
+        showSubscriptions: true,
+        showLikedVideos: true,
+        allowComments: true,
+        allowMentions: true,
+        emailNotifications: true,
+        commentNotifications: true,
+        subscriptionNotifications: true,
+        systemAnnouncements: true,
+        autoplayNext: true,
+        defaultPlaybackSpeed: 1.0,
+        saveWatchHistory: true,
+        showProgressBar: true,
+        showViewCount: true,
+        showVideoDuration: true,
+        showChannelName: true,
+        personalizeRecommendations: true,
+        showTrending: true,
+        hideShorts: false
       }
-    },
-    { new: true }
-  ).select("settings");
-
-  if (!user) {
-    throw new ApiError(404, "User not found");
+    });
   }
 
-  return res
-    .status(200)
-    .json(new ApiResponse(200, user.settings, "Settings updated successfully"));
+  return res.status(200).json(
+    new ApiResponse(200, settings, "Settings fetched")
+  );
 });
 
-// Reset settings to default
-const resetSettings = asyncHandler(async (req, res) => {
-  const defaultSettings = {
-    profileVisibility: 'public',
-    showSubscriptions: true,
-    showLikedVideos: true,
-    allowComments: true,
-    allowMentions: true,
-    emailNotifications: true,
-    commentNotifications: true,
-    subscriptionNotifications: true,
-    systemAnnouncements: true
-  };
+/**
+ * UPDATE SETTINGS
+ */
+export const updateUserSettings = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
 
-  const user = await User.findByIdAndUpdate(
-    req.user?._id,
-    { $set: { settings: defaultSettings } },
-    { new: true }
-  ).select("settings");
+  // Allow ONLY known fields
+  const allowedFields = [
+    "profileVisibility",
+    "showSubscriptions",
+    "showLikedVideos",
+    "allowComments",
+    "allowMentions",
 
-  if (!user) {
-    throw new ApiError(404, "User not found");
+    "emailNotifications",
+    "commentNotifications",
+    "subscriptionNotifications",
+    "systemAnnouncements",
+
+    "autoplayNext",
+    "defaultPlaybackSpeed",
+    "saveWatchHistory",
+
+    "showProgressBar",
+    "showViewCount",
+    "showVideoDuration",
+    "showChannelName",
+
+    "personalizeRecommendations",
+    "showTrending",
+    "hideShorts"
+  ];
+
+  const data = {};
+  for (const key of allowedFields) {
+    if (req.body[key] !== undefined) {
+      data[key] = req.body[key];
+    }
   }
 
-  return res
-    .status(200)
-    .json(new ApiResponse(200, user.settings, "Settings reset successfully"));
+  const updated = await prisma.userSettings.upsert({
+    where: { userId },
+    update: data,
+    create: {
+      userId,
+      profileVisibility: "PUBLIC",
+      showSubscriptions: true,
+      showLikedVideos: true,
+      allowComments: true,
+      allowMentions: true,
+      emailNotifications: true,
+      commentNotifications: true,
+      subscriptionNotifications: true,
+      systemAnnouncements: true,
+      autoplayNext: true,
+      defaultPlaybackSpeed: 1.0,
+      saveWatchHistory: true,
+      showProgressBar: true,
+      showViewCount: true,
+      showVideoDuration: true,
+      showChannelName: true,
+      personalizeRecommendations: true,
+      showTrending: true,
+      hideShorts: false,
+      ...data
+    }
+  });
+
+  return res.status(200).json(
+    new ApiResponse(200, updated, "Settings updated successfully")
+  );
 });
 
-export {
-  getSettings,
-  updateSettings,
-  resetSettings
-};
+/**
+ * RESET SETTINGS
+ */
+export const resetUserSettings = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const reset = await prisma.userSettings.update({
+    where: { userId },
+    data: {
+      profileVisibility: "PUBLIC",
+      showSubscriptions: true,
+      showLikedVideos: true,
+      allowComments: true,
+      allowMentions: true,
+
+      emailNotifications: true,
+      commentNotifications: true,
+      subscriptionNotifications: true,
+      systemAnnouncements: true,
+
+      autoplayNext: true,
+      defaultPlaybackSpeed: 1.0,
+      saveWatchHistory: true,
+
+      showProgressBar: true,
+      showViewCount: true,
+      showVideoDuration: true,
+      showChannelName: true,
+
+      personalizeRecommendations: true,
+      showTrending: true,
+      hideShorts: false
+    }
+  });
+
+  return res.status(200).json(
+    new ApiResponse(200, reset, "Settings reset to default")
+  );
+});

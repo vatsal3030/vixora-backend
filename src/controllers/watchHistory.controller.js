@@ -66,7 +66,6 @@ export const getWatchProgress = asyncHandler(async (req, res) => {
 export const getContinueWatching = asyncHandler(async (req, res) => {
   const userId = req.user.id;
 
-  console.log('Fetching continue watching for user:', userId);
 
   let {
     page = "1",
@@ -153,7 +152,6 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
     }
   });
 
-  console.log('Found watch history entries:', history.length);
 
   const totalVideos = await prisma.watchHistory.count({
     where: {
@@ -164,7 +162,6 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
     }
   });
 
-  console.log('Total watch history count:', totalVideos);
 
   return res.status(200).json(
     new ApiResponse(
