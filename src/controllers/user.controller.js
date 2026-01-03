@@ -2,7 +2,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import prisma from "../db/prisma.js";
 import uploadOnCloudinary, { deleteImageOnCloudinary } from "../utils/cloudinary.js";
-import { createUserSchema } from "../schemas/CreateUserSchema.js";
+import { createUserSchema } from "../schemas/createUserSchema.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { generateAccessToken } from "../utils/jwt.js";
