@@ -26,12 +26,26 @@ const app = express();
 /* ---------- GLOBAL MIDDLEWARE ---------- */
 app.use(helmet());
 
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",")
+  : ["http://localhost:5173"];
+
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:3000"],
+    origin: (origin, callback) => {
+      // allow server-to-server & tools like Postman
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
+
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -44,6 +58,10 @@ app.use(cookieParser());
 
 /* ---------- RATE LIMIT ---------- */
 app.use("/api", apiLimiter);
+
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
 /* ---------- ROUTES ---------- */
 app.use("/api/v1/users", userRouter);

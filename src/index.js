@@ -10,7 +10,7 @@ async function startServer() {
     console.log("✅ Database connected");
 
     const server = app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`🚀 Server running on ${PORT}`);
     });
 
     process.on("SIGTERM", async () => {
