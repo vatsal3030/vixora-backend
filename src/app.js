@@ -23,6 +23,9 @@ import settingRouter from "./routes/settings.routes.js";
 
 const app = express();
 
+app.set("trust proxy", 1);
+
+
 /* ---------- GLOBAL MIDDLEWARE ---------- */
 app.use(helmet());
 

@@ -180,6 +180,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     const options = {
         httpOnly: true,
         secure: true,
+        sameSite: "none",   // REQUIRED
     }
 
     return res.
@@ -190,7 +191,9 @@ export const loginUser = asyncHandler(async (req, res) => {
             new ApiResponse
                 (
                     200,
-                    { user: loggedInUser, refreshToken },
+                    { user: loggedInUser,
+                        //  refreshToken 
+                        },
                     "User Logged In Successfully"
                 )
         )
@@ -210,6 +213,7 @@ export const logOutUser = asyncHandler(async (req, res) => {
     const options = {
         httpOnly: true,
         secure: true,
+        sameSite: "none",   // REQUIRED
     }
 
     return res.
@@ -242,6 +246,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
         const options = {
             httpOnly: true,
             secure: true,
+            sameSite: "none",   // REQUIRED
         }
 
         const { accessToken, newRefreshToken } = await generateAccessAndRefreshToken(user.id)
@@ -252,7 +257,9 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
             cookie("refreshToken", newRefreshToken, options).
             json(
                 new ApiResponse(200,
-                    { accessToken, refreshToken: newRefreshToken },
+                    { 
+                        // accessToken, refreshToken: newRefreshToken 
+                    },
                     "Access token refreshed successfully"
                 )
             )
@@ -503,61 +510,61 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
 })
 
 export const getWatchHistory = asyncHandler(async (req, res) => {
-  const userId = req.user?.id;
-  if (!userId) throw new ApiError(404, "User not found");
+    const userId = req.user?.id;
+    if (!userId) throw new ApiError(404, "User not found");
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      watchHistory: {
-        orderBy: {
-          createdAt: "desc",
-        },
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
         select: {
-          id: true,
-          progress: true,
-          duration: true,
-          completed: true,
-          lastWatchedAt: true,
-
-          // ✅ Correct relation usage
-          video: {
-            select: {
-              id: true,
-              title: true,
-              description: true,
-              thumbnail: true,
-              duration: true,
-              views: true,
-              owner: {
+            watchHistory: {
+                orderBy: {
+                    createdAt: "desc",
+                },
                 select: {
-                  id: true,
-                  fullName: true,
-                  username: true,
-                  avatar: true
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  });
+                    id: true,
+                    progress: true,
+                    duration: true,
+                    completed: true,
+                    lastWatchedAt: true,
 
-  return res.status(200).json(
-    new ApiResponse(
-      200,
-      user?.watchHistory || [],
-      "Watch history fetched successfully"
-    )
-  );
+                    // ✅ Correct relation usage
+                    video: {
+                        select: {
+                            id: true,
+                            title: true,
+                            description: true,
+                            thumbnail: true,
+                            duration: true,
+                            views: true,
+                            owner: {
+                                select: {
+                                    id: true,
+                                    fullName: true,
+                                    username: true,
+                                    avatar: true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            user?.watchHistory || [],
+            "Watch history fetched successfully"
+        )
+    );
 });
 
 
 
 export const getUserById = asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    
+
     if (!userId) {
         throw new ApiError(400, "User ID is required");
     }
