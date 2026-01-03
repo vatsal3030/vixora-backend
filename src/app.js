@@ -79,6 +79,14 @@ app.use("/api/v1/watch-history", watchHistoryRouter);
 app.use("/api/v1/feed", feedRouter);
 app.use("/api/v1/settings", settingRouter);
 
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Vidora Backend is running 🚀",
+    version: "1.0.0"
+  });
+});
+
 /* ---------- 404 HANDLER ---------- */
 app.use((req, res) => {
   res.status(404).json({
