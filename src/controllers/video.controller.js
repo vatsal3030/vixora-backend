@@ -333,8 +333,14 @@ export const publishAVideo = asyncHandler(async (req, res) => {
             await prisma.notification.createMany({
                 data: subscribers.map(sub => ({
                     userId: sub.subscriberId,
-                    videoId: newVideo.id
-                }))
+                    senderId: req.user.id,
+                    videoId: newVideo.id,
+                    type: "UPLOAD",
+                    title: "New Video Uploaded",
+                    message: `${req.user.username} uploaded: ${newVideo.title}`,
+                    data: {}
+                })),
+                skipDuplicates: true
             });
         }
     }

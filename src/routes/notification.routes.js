@@ -6,7 +6,8 @@ import {
     markAllNotificationsRead,
     deleteNotification,
     getUnreadNotificationCount,
-    deleteAllNotification
+    deleteAllNotifications,
+    getUnreadNotifications,
 } from "../controllers/notification.controller.js";
 
 const router = Router();
@@ -20,6 +21,9 @@ router.get("/", getAllNotifications);
 // 🔔 Get unread notification count
 router.get("/unread-count", getUnreadNotificationCount);
 
+// 🔔 Get unread notifications
+router.get("/unread", getUnreadNotifications);
+
 // ✅ Mark single notification as read
 router.patch("/:notificationId/read", markNotificationRead);
 
@@ -30,6 +34,6 @@ router.patch("/read-all", markAllNotificationsRead);
 router.delete("/:notificationId", deleteNotification);
 
 // 🗑️ Delete a All notification
-router.delete("/", deleteAllNotification);
+router.delete("/", deleteAllNotifications);
 
 export default router;

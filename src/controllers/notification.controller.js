@@ -6,24 +6,97 @@ import asyncHandler from "../utils/asyncHandler.js"
 export const getAllNotifications = asyncHandler(async (req, res) => {
     const userId = req.user.id;
 
+    let {
+        page = "1",
+        limit = "10"
+    } = req.query;
+
+    page = parseInt(page);
+    limit = parseInt(limit);
+
+    const skip = (page - 1) * limit;
+
+    // 🔢 Total count for pagination metadata
+    const total = await prisma.notification.count({
+        where: { userId }
+    });
+
     const notifications = await prisma.notification.findMany({
         where: {
-            userId
+            userId: userId
         },
         orderBy: {
             createdAt: "desc"
         },
-        take: 30, // limit for performance
-        select: {
-            id: true,
-            isRead: true,
-            createdAt: true,
-            videoId: true
-        }
+        skip,
+        take: limit,
+        include: {
+            sender: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    username: true,
+                    avatar: true
+                }
+            },
+            video: {
+                select: {
+                    id: true,
+                    title: true,
+                    thumbnail: true,
+                    duration: true,
+                    views: true,
+                    isPublished: true,
+                    createdAt: true,
+                    owner: {
+                        select: {
+                            id: true,
+                            fullName: true,
+                            username: true,
+                            avatar: true
+                        }
+                    }
+                }
+            }
+        },
+
     });
 
+    const formatted = notifications.map(n => ({
+        id: n.id,
+        isRead: n.isRead,
+        createdAt: n.createdAt,
+
+        message: n.message,
+        title: n.title,
+
+        sender: n.sender,
+
+        video: n.video ? {
+            id: n.video.id,
+            title: n.video.title,
+            thumbnail: n.video.thumbnail,
+            duration: n.video.duration,
+            views: n.video.views,
+            uploadedAt: n.video.createdAt,
+            channel: n.video.owner
+        } : null
+    }));
+
     return res.status(200).json(
-        new ApiResponse(200, notifications, "Notifications fetched")
+        new ApiResponse(
+            200,
+            {
+                notifications: formatted,
+                pagination: {
+                    total,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(total / limit)
+                }
+            },
+            "All notifications fetched"
+        )
     );
 });
 
@@ -42,6 +115,59 @@ export const getUnreadNotificationCount = asyncHandler(async (req, res) => {
             200,
             { unreadCount: count },
             "Unread notification count fetched"
+        )
+    );
+});
+
+export const getUnreadNotifications = asyncHandler(async (req, res) => {
+
+    const userId = req.user.id;
+
+    let {
+        page = "1",
+        limit = "10"
+    } = req.query;
+
+    page = parseInt(page);
+    limit = parseInt(limit);
+
+    const skip = (page - 1) * limit;
+
+    const totalUnread = await prisma.notification.count({
+        where: { userId, isRead: false }
+    });
+
+    const unread = await prisma.notification.findMany({
+        where: {
+            userId,
+            isRead: false
+        },
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        select: {
+            id: true,
+            title: true,
+            message: true,
+            isRead: true,
+            createdAt: true,
+            senderId: true
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                notifications: unread,
+                pagination: {
+                    total: totalUnread,
+                    page,
+                    limit,
+                    totalPages: Math.ceil(totalUnread / limit)
+                }
+            },
+            "Unread notifications fetched"
         )
     );
 });
@@ -108,7 +234,7 @@ export const deleteNotification = asyncHandler(async (req, res) => {
     );
 });
 
-export const deleteAllNotification = asyncHandler(async (req, res) => {
+export const deleteAllNotifications = asyncHandler(async (req, res) => {
     const userId = req.user.id;
 
     const result = await prisma.notification.deleteMany({

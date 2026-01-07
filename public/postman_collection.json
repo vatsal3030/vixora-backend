@@ -1,0 +1,1913 @@
+{
+	"info": {
+		"_postman_id": "0aeca141-820d-439a-b411-ef3b52f518f6",
+		"name": "youtube_backend",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "43338014"
+	},
+	"item": [
+		{
+			"name": "user",
+			"item": [
+				{
+					"name": "register",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "fullName",
+									"value": "ashish chanchlani vines",
+									"type": "text"
+								},
+								{
+									"key": "username",
+									"value": "ashishchanchlanivines",
+									"type": "text"
+								},
+								{
+									"key": "email",
+									"value": "vatsalvadgama04@gmail.com",
+									"type": "text"
+								},
+								{
+									"key": "password",
+									"value": "12121212",
+									"type": "text"
+								},
+								{
+									"key": "avatar",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/Downloads/ashish_avatar.jpg"
+								},
+								{
+									"key": "coverImage",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/Downloads/ashish_cover_image.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/users/register",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"register"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "verify email",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"identifier\":\"vatsalvadgama04@gmail.com\",\r\n    \"otp\":\"710472\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/verify-email",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"verify-email"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "refresh-token",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/users/refresh-token",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"refresh-token"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "login",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "// {\r\n//     \"username\":\"boby_359\",\r\n//     \"password\":\"123456\"\r\n// }\r\n{\r\n    \"email\":\"vatsalvadgama05@gmail.com\",\r\n    \"password\":\"123456\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/login",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "logout",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/users/logout",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"logout"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "current-user",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": ""
+						},
+						"url": {
+							"raw": "{{server}}/users/current-user",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"current-user"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update-account",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n        \"fullName\": \"vatsal\",\r\n        \"email\": \"v123@gmail.com\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/update-account",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"update-account"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update-avatar",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "avatar",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/OneDrive/Gambar/Dwarka/IMG-20221021-WA0020.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/users/update-avatar",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"update-avatar"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update-coverImage",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "coverImage",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/OneDrive/Gambar/Dwarka/IMG-20221022-WA0013.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/users/update-coverImage",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"update-coverImage"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update-description",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"channelDescription\":\"channelDescription\",\r\n    \"channelLinks\":\"channelLinks\",\r\n    \"channelCategory\":\"channelCategory\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/update-description",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"update-description"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "User-Channle-Profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/users/u/boby_359",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"u",
+								"boby_359"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "History",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/users/history",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"history"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "change-password",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"oldPassword\":\"12345678\",\r\n    \"newPassword\":\"12345678\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/change-password",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"change-password"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "forgot password",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"email\":\"vatsalvadgama9@gmail.com\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/forgot-password",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"forgot-password"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "forgot password verify",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"email\":\"vatsalvadgama9@gmail.com\",\r\n    \"otp\":\"337629\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/forgot-password/verify",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"forgot-password",
+								"verify"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "reset password",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"email\":\"vatsalvadgama9@gmail.com\",\r\n    \"otp\":\"337629\",\r\n    \"newPassword\":\"12345678\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/reset-password",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"reset-password"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "video",
+			"item": [
+				{
+					"name": "get all videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos?isShort=true&page=1&limit=10",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos"
+							],
+							"query": [
+								{
+									"key": "isShort",
+									"value": "true"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "my videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/me?isShort=false",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"me"
+							],
+							"query": [
+								{
+									"key": "isShort",
+									"value": "false"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get video by id",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/18921e60-1d06-4983-96b1-a33e32e12eac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"18921e60-1d06-4983-96b1-a33e32e12eac"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "publish video",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "title",
+									"value": "Cinematic waterFall in kerala",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "Cinematic waterFall in kerala located in deep forest . Such a beautifull waterfall ",
+									"type": "text"
+								},
+								{
+									"key": "thumbnail",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/OneDrive/Gambar/Screenshots/Screenshot 2026-01-07 183317.png"
+								},
+								{
+									"key": "videoFile",
+									"type": "file",
+									"src": "/C:/Users/VATSAL/Downloads/6394054-uhd_4096_2048_24fps.mp4"
+								},
+								{
+									"key": "tags",
+									"value": "[\"waterfall\",\"nature\",\"natureBeauty\",\"forest\"]",
+									"type": "text"
+								},
+								{
+									"key": "isShort",
+									"value": "false",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/videos/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update video",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "title",
+									"value": "Shorts first title changed",
+									"type": "text"
+								},
+								{
+									"key": "description",
+									"value": "Shorts first desrciption changed",
+									"type": "text"
+								},
+								{
+									"key": "thumbnail",
+									"type": "file",
+									"src": "/E:/A_yt_recorces/shorts_thumbnail/pexels-green-odette-232224115-32103936.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/videos/18921e60-1d06-4983-96b1-a33e32e12eac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"18921e60-1d06-4983-96b1-a33e32e12eac"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "toogle publish video",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/18921e60-1d06-4983-96b1-a33e32e12eac/publish",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"18921e60-1d06-4983-96b1-a33e32e12eac",
+								"publish"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "soft delete video",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "trash",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/trash/me",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"trash",
+								"me"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "restore deleted video",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/videos/0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a/restore",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"videos",
+								"0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a",
+								"restore"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "notification",
+			"item": [
+				{
+					"name": "get All notification",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "unread count",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/unread-count",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								"unread-count"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get all unread notifications",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/unread",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								"unread"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Mark single notification as read",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/80ed0a5d-b3cf-4727-9f19-e32cb0fa8a8c/read",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								"80ed0a5d-b3cf-4727-9f19-e32cb0fa8a8c",
+								"read"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Mark all notifications as read",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/read-all",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								"read-all"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete a single notification",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/80ed0a5d-b3cf-4727-9f19-e32cb0fa8a8c",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								"80ed0a5d-b3cf-4727-9f19-e32cb0fa8a8c"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete a All notification",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/notifications/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"notifications",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "likes",
+			"item": [
+				{
+					"name": "video like",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/likes/toggle/v/3b230e82-6c03-4190-b7d0-7c0363f400ac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"likes",
+								"toggle",
+								"v",
+								"3b230e82-6c03-4190-b7d0-7c0363f400ac"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "tweet like",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/likes/toggle/t/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"likes",
+								"toggle",
+								"t",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "comment like",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/likes/toggle/c/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"likes",
+								"toggle",
+								"c",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get liked videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/likes/videos",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"likes",
+								"videos"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "comment",
+			"item": [
+				{
+					"name": "get all video comment",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/comments/3b230e82-6c03-4190-b7d0-7c0363f400ac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"comments",
+								"3b230e82-6c03-4190-b7d0-7c0363f400ac"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "add comment to video",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"content\":\"deletet comment pin plz\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/comments/3b230e82-6c03-4190-b7d0-7c0363f400ac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"comments",
+								"3b230e82-6c03-4190-b7d0-7c0363f400ac"
+							],
+							"query": [
+								{
+									"key": "",
+									"value": null,
+									"disabled": true
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update comment",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"content\":\"edited comment\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/comments/c/7c3e0b47-b16e-485e-baa9-c19fda477727",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"comments",
+								"c",
+								"7c3e0b47-b16e-485e-baa9-c19fda477727"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "delete comment",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/comments/c/eff5a18d-5f15-4ead-9293-5657c5b944bd",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"comments",
+								"c",
+								"eff5a18d-5f15-4ead-9293-5657c5b944bd"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "tweet",
+			"item": [
+				{
+					"name": "create tweet",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "content",
+									"value": "second tweet",
+									"type": "text"
+								},
+								{
+									"key": "tweetImage",
+									"type": "file",
+									"src": "/E:/A_yt_recorces/shorts_thumbnail/pexels-green-odette-232224115-32103936.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/tweets/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get user tweets",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/tweets/user/00abdbf4-1aec-4999-9c8d-4725974f66d1",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"user",
+								"00abdbf4-1aec-4999-9c8d-4725974f66d1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get tweet by id",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/tweets/49253f74-f924-4853-b2ff-5dfba423b3fa",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"49253f74-f924-4853-b2ff-5dfba423b3fa"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update tweet",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"content\":\"tweet changed\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/tweets/49253f74-f924-4853-b2ff-5dfba423b3fa",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"49253f74-f924-4853-b2ff-5dfba423b3fa"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "delete tweet",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/tweets/9badf67e-b464-4c2c-8843-3ed71c8ba5a2",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"9badf67e-b464-4c2c-8843-3ed71c8ba5a2"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "restore deleted tweet",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "content",
+									"value": "first tweet",
+									"type": "text"
+								},
+								{
+									"key": "tweetImage",
+									"type": "file",
+									"src": "/E:/A_yt_recorces/shorts_thumbnail/pexels-green-odette-232224115-32103936.jpg"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{server}}/tweets/9badf67e-b464-4c2c-8843-3ed71c8ba5a2/restore",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"9badf67e-b464-4c2c-8843-3ed71c8ba5a2",
+								"restore"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get deleted tweets (trash)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/tweets/trash/me",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"tweets",
+								"trash",
+								"me"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "playlist",
+			"item": [
+				{
+					"name": "create playlist",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"name\":\"deleted\",\r\n    \"description\":\"sheet to follow for dsa\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/playlists/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get all playlist",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"name\":\"DSA\",\r\n    \"description\":\"sheet to follow for dsa\"\r\n}"
+						},
+						"url": {
+							"raw": "{{server}}/playlists/8672e7c1-7713-4be0-bc3f-23fd98c3fb5f",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"8672e7c1-7713-4be0-bc3f-23fd98c3fb5f"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "toggle playlist status",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"name\":\"DSA\",\r\n    \"description\":\"sheet to follow for dsa\"\r\n}"
+						},
+						"url": {
+							"raw": "{{server}}/playlists/8672e7c1-7713-4be0-bc3f-23fd98c3fb5f/toggle-visibility",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"8672e7c1-7713-4be0-bc3f-23fd98c3fb5f",
+								"toggle-visibility"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update playlist",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"name\":\"DSA\",\r\n    \"description\":\"updated sheet to follow for dsa\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/playlists/8672e7c1-7713-4be0-bc3f-23fd98c3fb5f",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"8672e7c1-7713-4be0-bc3f-23fd98c3fb5f"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "delete playlist",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/playlists/54135d6a-c46e-47d3-8d3c-c844152e0842",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"54135d6a-c46e-47d3-8d3c-c844152e0842"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "add video to playlist",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/playlists/add/0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a/8672e7c1-7713-4be0-bc3f-23fd98c3fb5f",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"add",
+								"0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a",
+								"8672e7c1-7713-4be0-bc3f-23fd98c3fb5f"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "remove video to playlist",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/playlists/remove/0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a/8672e7c1-7713-4be0-bc3f-23fd98c3fb5f",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"remove",
+								"0e3fa5a2-8313-4850-aaf7-c7e3343a0f7a",
+								"8672e7c1-7713-4be0-bc3f-23fd98c3fb5f"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "get user playlist",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/playlists/user/00abdbf4-1aec-4999-9c8d-4725974f66d1",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"user",
+								"00abdbf4-1aec-4999-9c8d-4725974f66d1"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "New Request",
+					"protocolProfileBehavior": {
+						"disableBodyPruning": true
+					},
+					"request": {
+						"method": "GET",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"name\":\"deleted\",\r\n    \"description\":\"sheet to follow for dsa\"\r\n}"
+						},
+						"url": {
+							"raw": "{{server}}/playlists/user/me",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"playlists",
+								"user",
+								"me"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "channel",
+			"item": [
+				{
+					"name": "get channel info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/channels/f194a527-2579-4744-b9ad-f1416f3bf96a",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"channels",
+								"f194a527-2579-4744-b9ad-f1416f3bf96a"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "channel videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/channels/f194a527-2579-4744-b9ad-f1416f3bf96a/videos",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"channels",
+								"f194a527-2579-4744-b9ad-f1416f3bf96a",
+								"videos"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "channel tweets",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/channels/f194a527-2579-4744-b9ad-f1416f3bf96a/tweets",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"channels",
+								"f194a527-2579-4744-b9ad-f1416f3bf96a",
+								"tweets"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "channel playlists",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/channels/f194a527-2579-4744-b9ad-f1416f3bf96a/playlists",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"channels",
+								"f194a527-2579-4744-b9ad-f1416f3bf96a",
+								"playlists"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "subscription",
+			"item": [
+				{
+					"name": "get all subscribed channels videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/subscriptions",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"subscriptions"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Subscribe / Unsubscribe a channel",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/subscriptions/c/f194a527-2579-4744-b9ad-f1416f3bf96a/subscribe",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"subscriptions",
+								"c",
+								"f194a527-2579-4744-b9ad-f1416f3bf96a",
+								"subscribe"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "subscriber count",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/subscriptions/c/ce4ddce8-8d46-4741-97b9-a46e62451cc1/subscribers/count",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"subscriptions",
+								"c",
+								"ce4ddce8-8d46-4741-97b9-a46e62451cc1",
+								"subscribers",
+								"count"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "channels logged-in user is subscribed to",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/subscriptions/u/subscriptions",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"subscriptions",
+								"u",
+								"subscriptions"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "dashboard",
+			"item": [
+				{
+					"name": "overview",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/dashboard/overview",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"dashboard",
+								"overview"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "growth",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/dashboard/growth",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"dashboard",
+								"growth"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "insights",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/dashboard/insights",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"dashboard",
+								"insights"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "top-videos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/dashboard/top-videos",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"dashboard",
+								"top-videos"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "analytics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/dashboard/analytics",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"dashboard",
+								"analytics"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "watch history",
+			"item": [
+				{
+					"name": "Save / update watch progress",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"videoId\":\"3b230e82-6c03-4190-b7d0-7c0363f400ac\",\r\n    \"progress\":8,\r\n    \"duration\":11\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/watch-history/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"watch-history",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get continue watching list",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/watch-history/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"watch-history",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "bulk watching progress",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"videoIds\": [\r\n    \"3b230e82-6c03-4190-b7d0-7c0363f400ac\",\r\n    \"60ec1fc5-fe2f-4fa6-8658-d320cee65fef\",\r\n    \"2ac7cc66-c06d-4025-91e0-47c2ee12d113\"\r\n    ]\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/watch-history/bulk",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"watch-history",
+								"bulk"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get progress for a single video",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/watch-history/3b230e82-6c03-4190-b7d0-7c0363f400ac",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"watch-history",
+								"3b230e82-6c03-4190-b7d0-7c0363f400ac"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "feed",
+			"item": [
+				{
+					"name": "home feed",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/feed/home",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"feed",
+								"home"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "subscriptions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/feed/subscriptions",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"feed",
+								"subscriptions"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "trending",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/feed/trending?isShort=true",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"feed",
+								"trending"
+							],
+							"query": [
+								{
+									"key": "isShort",
+									"value": "true"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "shorts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/feed/shorts",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"feed",
+								"shorts"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "public watch",
+			"item": []
+		},
+		{
+			"name": "settings",
+			"item": [
+				{
+					"name": "get All settings",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/settings/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"settings",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "update settings",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/settings/",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"settings",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "reset",
+					"request": {
+						"method": "PATCH",
+						"header": [],
+						"url": {
+							"raw": "{{server}}/settings/reset",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"settings",
+								"reset"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"requests": {},
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "server",
+			"value": ""
+		}
+	]
+}

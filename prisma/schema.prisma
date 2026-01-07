@@ -120,9 +120,10 @@ model Video {
   thumbnailPublicId String
   videoPublicId     String
 
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  feedScores FeedScore[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  feedScores    FeedScore[]
+  notifications Notification[]
 
   @@index([ownerId])
   @@index([isPublished])
@@ -287,11 +288,13 @@ model Notification {
 
   userId   String
   senderId String?
+  videoId  String?
 
-  user   User  @relation("UserNotifications", fields: [userId], references: [id])
-  sender User? @relation("NotificationSender", fields: [senderId], references: [id])
+  user   User   @relation("UserNotifications", fields: [userId], references: [id])
+  sender User?  @relation("NotificationSender", fields: [senderId], references: [id])
+  video  Video? @relation(fields: [videoId], references: [id])
 
-  type    NotificationType
+  type    NotificationType @default(UPLOAD)
   title   String
   message String
   data    Json?
