@@ -7,7 +7,11 @@ import prisma from "../db/prisma.js";
 export const verifyJwt = asyncHandler(async (req, res, next) => {
     try {
         const token = req.cookies?.accessToken || req.header("Authorization")?.replace("Bearer ", "")
-        if (!token) throw new ApiError(401, "Unothorized request")
+        
+        if (!token) {
+            throw new ApiError(401, "Unauthorized request")
+        }
+
         const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET)
 
         const user = await prisma.user.findUnique({
@@ -21,8 +25,6 @@ export const verifyJwt = asyncHandler(async (req, res, next) => {
             throw new ApiError(401, "Invalid Access Token");
         }
 
-        // 🔐 HARD SECURITY RULE:
-        // Deleted users must NEVER access protected routes
         if (user.isDeleted) {
             throw new ApiError(
                 403,
@@ -33,8 +35,12 @@ export const verifyJwt = asyncHandler(async (req, res, next) => {
         req.user = user
         next()
     } catch (error) {
-        // throw new ApiError(401, error?.message || "Invalid accessToken")
-        throw new ApiError(401, "Unauthorized");
-
+        if (error.name === 'JsonWebTokenError') {
+            throw new ApiError(401, "Invalid token format")
+        }
+        if (error.name === 'TokenExpiredError') {
+            throw new ApiError(401, "Token expired")
+        }
+        throw new ApiError(401, error?.message || "Unauthorized")
     }
 })
