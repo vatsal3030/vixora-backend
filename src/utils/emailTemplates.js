@@ -1,8 +1,12 @@
-export const restoreOtpTemplate = (otp) => ({
+export const restoreOtpTemplate = ({
+  fullName,
+  otp
+}) => ({
   subject: "Your Vidora Account Restore OTP",
   html: `
     <div style="font-family: Arial, sans-serif; line-height: 1.5;">
       <h2>Hi from Vidora 👋</h2>
+      <p>Hi <strong>${fullName}</strong>,</p>
       <p>Your OTP for account restore is:</p>
       <h3 style="letter-spacing: 3px;">${otp}</h3>
       <p>This code is valid for 5 minutes.</p>

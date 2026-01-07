@@ -35,7 +35,6 @@ export const updateChannelVideoScores = async (channelId) => {
     await Promise.all(updates);
 };
 
-
 export const toggleSubscription = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
 
@@ -110,7 +109,6 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
         )
     );
 });
-
 
 export const getSubscriberCount = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
@@ -275,4 +273,81 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
     );
 });
 
+export const setNotificationLevel = asyncHandler(async (req, res) => {
+    const { channelId } = req.params;
+    const { level } = req.body;
+    const userId = req.user.id;
 
+    if (!channelId) {
+        throw new ApiError(400, "Channel ID is required");
+    }
+
+    if (!level) {
+        throw new ApiError(400, "Notification level is required");
+    }
+
+    // Find the subscription of logged-in user to that channel
+    const subscription = await prisma.subscription.findUnique({
+        where: {
+            subscriberId_channelId: {
+                subscriberId: userId,
+                channelId
+            }
+        },
+        select: { id: true }
+    });
+
+    if (!subscription) {
+        throw new ApiError(404, "Subscription not found");
+    }
+
+    // Update preference
+    const updated = await prisma.subscription.update({
+        where: { id: subscription.id },
+        data: {
+            notificationLevel: level
+        },
+        select: {
+            id: true,
+            subscriberId: true,
+            channelId: true,
+            notificationLevel: true
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, updated, "Notification level updated successfully")
+    );
+});
+
+export const getSubscriptionStatus = asyncHandler(async (req, res) => {
+    const { channelId } = req.params;
+    const userId = req.user.id;
+
+    if (!channelId) {
+        throw new ApiError(400, "Channel ID is required");
+    }
+
+    const subscription = await prisma.subscription.findFirst({
+        where: {
+            subscriberId: userId,
+            channelId
+        },
+        select: {
+            id: true,
+            notificationLevel: true
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                isSubscribed: !!subscription,
+                subscriptionId: subscription?.id || null,
+                notificationLevel: subscription?.notificationLevel || "NONE"
+            },
+            "Subscription status fetched successfully"
+        )
+    );
+});

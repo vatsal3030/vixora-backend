@@ -3,7 +3,9 @@ import {
     getSubscribedChannels,
     getSubscriberCount,
     toggleSubscription,
-    getSubscribedVideos
+    getSubscribedVideos,
+    getSubscriptionStatus,
+    setNotificationLevel
 } from "../controllers/subscription.controller.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 
@@ -29,5 +31,12 @@ router
     .route("/u/subscriptions")
     .get(getSubscribedChannels);
 
+router
+    .route("/c/:channelId/notifications")
+    .patch(setNotificationLevel);
+
+router
+    .route("/c/:channelId/status")
+    .get(getSubscriptionStatus);
 
 export default router;

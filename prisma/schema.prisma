@@ -170,6 +170,8 @@ model Subscription {
   channel    User @relation("UserSubscribers", fields: [channelId], references: [id])
   subscriber User @relation("UserSubscriptions", fields: [subscriberId], references: [id])
 
+  notificationLevel NotificationLevel @default(PERSONALIZED)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -177,6 +179,13 @@ model Subscription {
   @@index([channelId])
   @@index([subscriberId])
 }
+
+enum NotificationLevel {
+  ALL
+  PERSONALIZED
+  NONE
+}
+
 
 model Comment {
   id      String @id @default(uuid())

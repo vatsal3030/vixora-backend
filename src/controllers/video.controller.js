@@ -474,8 +474,8 @@ export const updateVideo = asyncHandler(async (req, res) => {
     }
 
     // At least one field required
-    if (!title && !description && !req.file?.thumbnail) {
-        throw new ApiError(400, "At least one field is required to update");
+    if (!title && !description && !req.file) {
+        throw new ApiError(400, "At least one field or thumbnail file is required");
     }
 
     const existingVideo = await prisma.video.findUnique({
@@ -483,7 +483,8 @@ export const updateVideo = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
-            thumbnailPublicId: true
+            thumbnailPublicId: true,
+            isDeleted: true
         }
     });
 
@@ -495,14 +496,19 @@ export const updateVideo = asyncHandler(async (req, res) => {
         throw new ApiError(403, "You are not allowed to update this video");
     }
 
+    if (existingVideo.isDeleted) {
+        throw new ApiError(400, "Video is deleted. Restore for edit ");
+    }
+
     const updateData = {};
 
     if (title) updateData.title = title;
     if (description) updateData.description = description;
 
     // 🖼️ Thumbnail update
-    if (req.files?.thumbnail?.[0]) {
-        const uploaded = await uploadOnCloudinary(req.files.thumbnail[0].path);
+    if (req.file) {
+
+        const uploaded = await uploadOnCloudinary(req.file.path);
 
         if (!uploaded) {
             throw new ApiError(500, "Thumbnail upload failed");
@@ -513,6 +519,7 @@ export const updateVideo = asyncHandler(async (req, res) => {
         updateData.thumbnail = uploaded.secure_url;
         updateData.thumbnailPublicId = uploaded.public_id;
     }
+
 
     const updatedVideo = await prisma.video.update({
         where: { id: videoId },
@@ -758,6 +765,10 @@ export const togglePublishStatus = asyncHandler(async (req, res) => {
         throw new ApiError(403, "You are not allowed to update this video");
     }
 
+    if (existingVideo.isDeleted) {
+        throw new ApiError(400, "Video is deleted. Restore for edit ");
+    }
+
     const updatedVideo = await prisma.video.update({
         where: { id: videoId },
         data: {
@@ -797,6 +808,7 @@ export const getUserVideos = asyncHandler(async (req, res) => {
     const whereClause = {
         ownerId: userId,
         isPublished: true,
+        isDeleted: false
     };
 
     if (query && query.trim().length > 0) {
@@ -881,7 +893,9 @@ export const getMyVideos = asyncHandler(async (req, res) => {
     if (!userId) throw new ApiError(401, "Unauthorized");
     // ✅ Base filter
     const whereClause = {
-        ownerId: userId
+        ownerId: userId,
+        isPublished: true,
+        isDeleted: false
     };
 
 

@@ -381,9 +381,6 @@ export const loginUser = asyncHandler(async (req, res) => {
         }
     })
 
-
-   
-
     if (!user) {
         throw new ApiError(404, "User not found")
     }
@@ -1050,17 +1047,24 @@ export const deleteAccount = asyncHandler(async (req, res) => {
 })
 
 export const restoreAccountRequest = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-    if (!email?.trim()) {
-        throw new ApiError(400, "Email is required");
+    const { email, username } = req.body;
+
+    if (!email?.trim() && !username?.trim()) {
+        throw new ApiError(400, "Either email or username is required");
     }
 
-    const user = await prisma.user.findUnique({
-        where: { email: email.toLowerCase().trim() },
+    const user = await prisma.user.findFirst({
+        where: {
+            OR: [
+                { email: email?.toLowerCase().trim() },
+                { username: username?.trim() }
+            ]
+        }
     })
 
+
     if (!user || !user.isDeleted || !user.deletedAt) {
-        throw new ApiError(404, "No deleted account found with this email");
+        throw new ApiError(404, "No deleted account found with this email or username");
     }
 
     const restoreDeadline =
@@ -1120,15 +1124,26 @@ export const restoreAccountRequest = asyncHandler(async (req, res) => {
 })
 
 export const restoreAccountConfirm = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
+    const { email, username, otp } = req.body;
 
-    if (!email?.trim() || !otp?.trim()) {
-        throw new ApiError(400, "Email and OTP are required");
+    if (!otp?.trim()) {
+        throw new ApiError(400, "OTP is required");
+    }
+
+    if (!email?.trim() && !username?.trim()) {
+        throw new ApiError(400, "Either email or username is required for restore confirmation");
     }
 
     const user = await prisma.user.findFirst({
-        where: { email: email.toLowerCase().trim(), isDeleted: true },
+        where: {
+            isDeleted: true,
+            OR: [
+                { email: email?.toLowerCase().trim() },
+                { username: username?.trim() }
+            ]
+        }
     })
+
 
     if (!user || !user.deletedAt) {
         throw new ApiError(404, "Deleted account not found");
