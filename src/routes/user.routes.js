@@ -18,7 +18,8 @@ import {
     forgotPasswordRequest,
     forgotPasswordVerify,
     verifyEmail,
-    resetPassword
+    resetPassword,
+    resendOtp
 } from "../controllers/user.controller.js";
 import { upload } from "../middlewares/multer.middleware.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
@@ -38,6 +39,7 @@ router.route("/register").post(
     registerUser
 )
 router.route("/verify-email").post(verifyEmail)
+router.route("/resend-otp").post(resendOtp)
 
 router.route("/login").post(loginUser)
 router.route("/logout").post(verifyJwt, logOutUser)

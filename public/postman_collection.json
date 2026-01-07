@@ -90,6 +90,33 @@
 					"response": []
 				},
 				{
+					"name": "resend otp",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\r\n    \"identifier\": \"rajkotgamer74@gmail.com\"\r\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{server}}/users/resend-otp",
+							"host": [
+								"{{server}}"
+							],
+							"path": [
+								"users",
+								"resend-otp"
+							]
+						}
+					},
+					"response": []
+				},
+				{
 					"name": "refresh-token",
 					"request": {
 						"method": "POST",

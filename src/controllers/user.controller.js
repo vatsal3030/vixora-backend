@@ -382,17 +382,15 @@ export const loginUser = asyncHandler(async (req, res) => {
     })
 
 
-    // 🔥 THIS IS THE MAIN FIX
-    if (!user.emailVerified) {
-        throw new ApiError(403, "Email not verified. Verify OTP first.");
-    }
+   
 
     if (!user) {
         throw new ApiError(404, "User not found")
     }
 
+    // 🔥 THIS IS THE MAIN FIX
     if (!user.emailVerified) {
-        throw new ApiError(401, "Please verify your email before logging in")
+        throw new ApiError(403, "Email not verified. Verify OTP first.");
     }
 
     if (user.authProvider !== "LOCAL") {
