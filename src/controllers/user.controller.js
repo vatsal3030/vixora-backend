@@ -94,14 +94,14 @@ export const registerUser = asyncHandler(async (req, res) => {
 
         // Prepare mail content
         const mailContent = emailVerificationOtpTemplate({
-            fullName: createdUser.fullName,
+            fullName: existingUser.fullName,
             otp,
         });
 
         // Send email using template
         try {
             await sendEmail({
-                to: createdUser.email,
+                to: existingUser.email,
                 subject: mailContent.subject,
                 html: mailContent.html,
                 text: `Your OTP is ${otp}`,
@@ -292,6 +292,75 @@ export const verifyEmail = asyncHandler(async (req, res) => {
     );
 });
 
+export const resendOtp = asyncHandler(async (req, res) => {
+    const { identifier } = req.body;
+
+    if (!identifier?.trim()) {
+        throw new ApiError(400, "Email or username is required");
+    }
+
+    // Find user by email OR username
+    const user = await prisma.user.findFirst({
+        where: {
+            OR: [
+                { email: identifier.toLowerCase().trim() },
+                { username: identifier.toLowerCase().trim() }
+            ]
+        }
+    });
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    if (user.emailVerified) {
+        throw new ApiError(400, "Email already verified");
+    }
+
+    // Check resend cooldown (2 minutes)
+    if (
+        user.otpLastSentAt &&
+        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
+    ) {
+        throw new ApiError(429, "Please wait before requesting again");
+    }
+
+    // Generate new OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await hashPassword(otp);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            otpHash,
+            otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
+            otpAttempts: 0,
+            otpLastSentAt: new Date(),
+        },
+    });
+
+    // Send verification email
+    const mailContent = emailVerificationOtpTemplate({
+        fullName: user.fullName,
+        otp,
+    });
+
+    try {
+        await sendEmail({
+            to: user.email,
+            subject: mailContent.subject,
+            html: mailContent.html,
+            text: `Your OTP is ${otp}`,
+        });
+    } catch (err) {
+        console.warn("Verification email failed:", err.message);
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Verification OTP resent successfully")
+    );
+});
+
 export const loginUser = asyncHandler(async (req, res) => {
     //   req->body -> data
     //   username or email based login
@@ -312,8 +381,18 @@ export const loginUser = asyncHandler(async (req, res) => {
         }
     })
 
+
+    // 🔥 THIS IS THE MAIN FIX
+    if (!user.emailVerified) {
+        throw new ApiError(403, "Email not verified. Verify OTP first.");
+    }
+
     if (!user) {
         throw new ApiError(404, "User not found")
+    }
+
+    if (!user.emailVerified) {
+        throw new ApiError(401, "Please verify your email before logging in")
     }
 
     if (user.authProvider !== "LOCAL") {
@@ -1022,12 +1101,12 @@ export const restoreAccountRequest = asyncHandler(async (req, res) => {
 
     // after OTP generation
     const mail = restoreOtpTemplate({
-        fullName: existingUser.fullName,
+        fullName: user.fullName,
         otp,
     });
 
     await sendEmail({
-        to: existingUser.email,
+        to: user.email,
         subject: mail.subject,
         html: mail.html,
     });
