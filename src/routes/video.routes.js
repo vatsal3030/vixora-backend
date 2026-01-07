@@ -9,7 +9,9 @@ import {
     getUserVideos,
     publishAVideo,
     togglePublishStatus,
-    updateVideo
+    updateVideo,
+    getAllDeletedVideos,
+    restoreVideo
 } from "../controllers/video.controller.js";
 
 const router = Router();
@@ -39,10 +41,23 @@ router.route("/:videoId").get(getVideoById);
 // 🔹 UPDATE VIDEO
 router.route("/:videoId").patch(upload.single("thumbnail"), updateVideo);
 
-// 🔹 DELETE VIDEO
+// 🔹SOFT DELETE VIDEO
 router.route("/:videoId").delete(deleteVideo);
 
 // 🔹 TOGGLE PUBLISH STATUS
 router.route("/:videoId/publish").patch(togglePublishStatus);
+
+// ─────────────────────────────
+// 🗑️ TRASH (SOFT-DELETED VIDEOS)
+// ─────────────────────────────
+
+// Get all deleted videos (last 7 days)
+router.route("/trash/me")
+    .get(getAllDeletedVideos);
+
+// Restore deleted video
+router.route("/:videoId/restore")
+    .patch(restoreVideo);
+
 
 export default router;

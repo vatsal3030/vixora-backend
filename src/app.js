@@ -20,6 +20,9 @@ import watchRouter from "./routes/watch.routes.js";
 import watchHistoryRouter from "./routes/watchHistory.routes.js";
 import feedRouter from "./routes/feed.routes.js";
 import settingRouter from "./routes/settings.routes.js";
+import authRouter from "./routes/auth.routes.js";
+import passport from "passport";
+import "./config/passport.js";
 
 const app = express();
 
@@ -66,6 +69,9 @@ app.get("/healthz", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
+    
+app.use(passport.initialize());
+
 /* ---------- ROUTES ---------- */
 app.use("/api/v1/users", userRouter);
 app.use("/api/v1/videos", videoRouter);
@@ -81,6 +87,7 @@ app.use("/api/v1/watch", watchRouter);
 app.use("/api/v1/watch-history", watchHistoryRouter);
 app.use("/api/v1/feed", feedRouter);
 app.use("/api/v1/settings", settingRouter);
+app.use("/api/v1/auth", authRouter);
 
 app.get("/", (req, res) => {
   res.status(200).json({

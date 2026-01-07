@@ -9,6 +9,8 @@ import { generateAccessToken } from "../utils/jwt.js";
 import { generateRefreshToken } from "../utils/jwt.js";
 import jwt from 'jsonwebtoken'
 import userSafeSelect from '../utils/userSafeSelect.js'
+import { sendEmail } from "../utils/email.js";
+import { restoreOtpTemplate, emailVerificationOtpTemplate, welcomeEmailTemplate, forgotPasswordOtpTemplate } from "../utils/emailTemplates.js";
 
 export const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -71,8 +73,46 @@ export const registerUser = asyncHandler(async (req, res) => {
         },
     });
 
-    if (existingUser) {
-        throw new ApiError(409, "User with given email or username already exists")
+    if (existingUser && existingUser.emailVerified) {
+        throw new ApiError(409, "User with given email or username already exists");
+    }
+
+    // 🟡 Exists but not verified → resend OTP
+    if (existingUser && !existingUser.emailVerified) {
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpHash = await hashPassword(otp);
+
+        await prisma.user.update({
+            where: { id: existingUser.id },
+            data: {
+                otpHash,
+                otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+                otpAttempts: 0,
+                otpLastSentAt: new Date(),
+            },
+        });
+
+        // Prepare mail content
+        const mailContent = emailVerificationOtpTemplate({
+            fullName: createdUser.fullName,
+            otp,
+        });
+
+        // Send email using template
+        try {
+            await sendEmail({
+                to: createdUser.email,
+                subject: mailContent.subject,
+                html: mailContent.html,
+                text: `Your OTP is ${otp}`,
+            });
+        } catch (err) {
+            console.warn("Verification email failed:", err.message);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, {}, "Verification OTP resent")
+        );
     }
 
     const avatarLocalPath = req.files?.avatar[0]?.path
@@ -122,12 +162,135 @@ export const registerUser = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Something went wrong while registering the user");
     }
 
+    // 6️⃣ Generate email verification OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await hashPassword(otp);
+
+    await prisma.user.update({
+        where: { id: createdUser.id },
+        data: {
+            otpHash,
+            otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5 min
+            otpAttempts: 0,
+            otpLastSentAt: new Date(),
+        },
+    });
+
+    // 7️⃣ Send verification email
+    // Prepare mail content
+    const mailContent = emailVerificationOtpTemplate({
+        fullName: createdUser.fullName,
+        otp,
+    });
+
+    // Send email using template
+    try {
+        await sendEmail({
+            to: createdUser.email,
+            subject: mailContent.subject,
+            html: mailContent.html,
+            text: `Your OTP is ${otp}`,
+        });
+    } catch (err) {
+        console.warn("Verification email failed:", err.message);
+    }
+
+
     return res.status(201).json(
-        new ApiResponse(200, createdUser, "User registered Successfully")
+        new ApiResponse(201, {}, "User registered Successfully. Please verify your email.")
     );
 
-
 })
+
+export const verifyEmail = asyncHandler(async (req, res) => {
+    const { identifier, otp } = req.body;
+
+    if (!identifier?.trim() || !otp?.trim()) {
+        throw new ApiError(400, "Identifier and OTP are required");
+    }
+
+    // 🔍 Find user by email OR username
+    const user = await prisma.user.findFirst({
+        where: {
+            OR: [
+                { email: identifier.toLowerCase().trim() },
+                { username: identifier.toLowerCase().trim() }
+            ]
+        }
+    });
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    if (user.emailVerified) {
+        return res.status(200).json(
+            new ApiResponse(200, {}, "Email already verified")
+        );
+    }
+
+    if (!user.otpHash || !user.otpExpiresAt) {
+        throw new ApiError(400, "OTP not requested");
+    }
+
+    // ⏰ OTP expiry check
+    if (user.otpExpiresAt < new Date()) {
+        throw new ApiError(400, "OTP expired");
+    }
+
+    // 🚫 Too many attempts
+    if (user.otpAttempts >= 5) {
+        throw new ApiError(
+            429,
+            "Too many incorrect attempts. Please request a new OTP."
+        );
+    }
+
+    // 🔐 Validate OTP
+    const isOtpValid = await comparePassword(otp, user.otpHash);
+    if (!isOtpValid) {
+        await prisma.user.update({
+            where: { id: user.id },
+            data: {
+                otpAttempts: { increment: 1 }
+            }
+        });
+
+        throw new ApiError(400, "Invalid OTP");
+    }
+
+    // ✅ OTP correct → verify email
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            emailVerified: true,
+            otpHash: null,
+            otpExpiresAt: null,
+            otpAttempts: 0,
+            otpLastSentAt: null,
+        }
+    });
+
+    // 📧 Send welcome email (NON-BLOCKING)
+    const mail = welcomeEmailTemplate({
+        fullName: user.fullName,
+    });
+
+    try {
+        await sendEmail({
+            to: user.email,
+            subject: mail.subject,
+            html: mail.html,
+            text: "Welcome to Vidora",
+        });
+    } catch (err) {
+        console.warn("Welcome email failed:", err.message);
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Email verified successfully")
+    );
+});
 
 export const loginUser = asyncHandler(async (req, res) => {
     //   req->body -> data
@@ -152,6 +315,14 @@ export const loginUser = asyncHandler(async (req, res) => {
     if (!user) {
         throw new ApiError(404, "User not found")
     }
+
+    if (user.authProvider !== "LOCAL") {
+        throw new ApiError(
+            400,
+            "This account uses Google sign-in. Please continue with Google."
+        );
+    }
+
 
     const isPasswordValid = await comparePassword(password, user.password)
 
@@ -191,9 +362,10 @@ export const loginUser = asyncHandler(async (req, res) => {
             new ApiResponse
                 (
                     200,
-                    { user: loggedInUser,
+                    {
+                        user: loggedInUser,
                         //  refreshToken 
-                        },
+                    },
                     "User Logged In Successfully"
                 )
         )
@@ -257,7 +429,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
             cookie("refreshToken", newRefreshToken, options).
             json(
                 new ApiResponse(200,
-                    { 
+                    {
                         // accessToken, refreshToken: newRefreshToken 
                     },
                     "Access token refreshed successfully"
@@ -317,6 +489,144 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
         );
 
 })
+
+export const forgotPasswordRequest = asyncHandler(async (req, res) => {
+    const { email } = req.body;
+
+    const normalizedEmail = email.toLowerCase().trim()
+
+    if (!email?.trim()) {
+        throw new ApiError(400, "Email is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+    });
+
+    // 🔐 Do NOT reveal user existence
+    if (!user || user.isDeleted) {
+        return res.status(404).json(
+            new ApiResponse(404, {}, "User not found")
+        );
+    }
+
+    // ⏱ resend cooldown
+    if (
+        user.otpLastSentAt &&
+        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
+    ) {
+        throw new ApiError(429, "Please wait before requesting again");
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await hashPassword(otp);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            otpHash,
+            otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            otpAttempts: 0,
+            otpLastSentAt: new Date(),
+        },
+    });
+
+    const mail = forgotPasswordOtpTemplate({
+        fullName: user.fullName,
+        otp,
+    });
+
+    await sendEmail({
+        to: user.email,
+        subject: mail.subject,
+        html: mail.html,
+        text: `Your reset OTP is ${otp}`,
+    });
+
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "If account exists, OTP will be sent ")
+    );
+})
+
+export const forgotPasswordVerify = asyncHandler(async (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email?.trim() || !otp?.trim()) {
+        throw new ApiError(400, "Email and OTP are required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { email: email.toLowerCase() },
+    });
+
+    if (!user || !user.otpHash || !user.otpExpiresAt) {
+        throw new ApiError(400, "Invalid or expired OTP");
+    }
+
+    if (user.otpExpiresAt < new Date()) {
+        throw new ApiError(400, "OTP expired");
+    }
+
+    if (user.otpAttempts >= 5) {
+        throw new ApiError(429, "Too many attempts");
+    }
+
+    const isValid = await comparePassword(otp, user.otpHash);
+
+    if (!isValid) {
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { otpAttempts: { increment: 1 } },
+        });
+
+        throw new ApiError(400, "Invalid OTP");
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "OTP verified")
+    );
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+        throw new ApiError(400, "All fields are required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { email: email.toLowerCase() },
+    });
+
+    if (!user || !user.otpHash) {
+        throw new ApiError(400, "Invalid request");
+    }
+
+    const isValid = await comparePassword(otp, user.otpHash);
+    if (!isValid || user.otpExpiresAt < new Date()) {
+        throw new ApiError(400, "Invalid or expired OTP");
+    }
+
+    const hashedPassword = await hashPassword(newPassword);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            password: hashedPassword,
+            otpHash: null,
+            otpExpiresAt: null,
+            otpAttempts: 0,
+            otpLastSentAt: null,
+            refreshToken: null, // 🔥 invalidate sessions
+        },
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Password reset successfully. Please login.")
+    );
+});
+
 
 export const getCurrentUser = asyncHandler(async (req, res) => {
     return res.
@@ -451,7 +761,6 @@ export const updateUserCoverImage = asyncHandler(async (req, res) => {
     );
 });
 
-
 export const getUserChannelProfile = asyncHandler(async (req, res) => {
     const { username } = req.params;
     const channel = await prisma.user.findUnique({
@@ -560,8 +869,6 @@ export const getWatchHistory = asyncHandler(async (req, res) => {
     );
 });
 
-
-
 export const getUserById = asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
@@ -635,3 +942,190 @@ export const updateChannelDescription = asyncHandler(async (req, res) => {
         new ApiResponse(200, updated, "Channel updated successfully")
     );
 });
+
+export const deleteAccount = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+    if (!userId) {
+        throw new ApiError(404, "User not found");
+    }
+
+    await prisma.user.update({
+        where: { id: userId },
+        data: {
+            isDeleted: true,
+            refreshToken: null,
+            deletedAt: new Date(),
+        }
+    });
+
+    const cookieOptions = {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+    };
+
+    res.clearCookie("accessToken", cookieOptions);
+    res.clearCookie("refreshToken", cookieOptions);
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Account deleted successfully. You can restore it within 7 days.")
+    );
+})
+
+export const restoreAccountRequest = asyncHandler(async (req, res) => {
+    const { email } = req.body;
+    if (!email?.trim()) {
+        throw new ApiError(400, "Email is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+    })
+
+    if (!user || !user.isDeleted || !user.deletedAt) {
+        throw new ApiError(404, "No deleted account found with this email");
+    }
+
+    const restoreDeadline =
+        user.deletedAt.getTime() +
+        7 * 24 * 60 * 60 * 1000;
+
+    if (Date.now() > restoreDeadline) {
+        throw new ApiError(403, "Restore window expired. Account cannot be recovered.");
+    }
+
+    // ⏱ OTP resend cooldown (2 minutes)
+    if (
+        user.otpLastSentAt &&
+        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
+    ) {
+        throw new ApiError(
+            429,
+            "OTP already sent. Please wait before requesting again."
+        );
+    }
+
+
+    // generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await hashPassword(otp);
+
+    await prisma.user.update({
+        where: { email: email.toLowerCase().trim() },
+        data: {
+            otpHash,
+            otpExpiresAt: new Date(Date.now() + 1000 * 60 * 5),
+            otpAttempts: 0,           // 🔐 reset attempts
+            otpLastSentAt: new Date() // 🔐 mark send time
+        }
+    })
+
+    // after OTP generation
+    const mail = restoreOtpTemplate({
+        fullName: existingUser.fullName,
+        otp,
+    });
+
+    await sendEmail({
+        to: existingUser.email,
+        subject: mail.subject,
+        html: mail.html,
+    });
+
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {},
+            "OTP sent to your email. Use it to restore your account."
+        )
+    );
+})
+
+export const restoreAccountConfirm = asyncHandler(async (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email?.trim() || !otp?.trim()) {
+        throw new ApiError(400, "Email and OTP are required");
+    }
+
+    const user = await prisma.user.findFirst({
+        where: { email: email.toLowerCase().trim(), isDeleted: true },
+    })
+
+    if (!user || !user.deletedAt) {
+        throw new ApiError(404, "Deleted account not found");
+    }
+
+    if (!user.otpHash || !user.otpExpiresAt) {
+        throw new ApiError(400, "OTP not requested");
+    }
+
+    if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
+        throw new ApiError(400, "OTP expired");
+    }
+
+    if (user.otpAttempts >= 5) {
+        throw new ApiError(
+            429,
+            "Too many incorrect attempts. Please request a new OTP."
+        );
+    }
+
+    const isOtpValid = await comparePassword(otp, user.otpHash);
+    if (!isOtpValid) {
+        await prisma.user.update({
+            where: { id: user.id },
+            data: {
+                otpAttempts: { increment: 1 }
+            }
+        });
+
+        throw new ApiError(400, "Invalid OTP");
+    }
+
+    // restore account
+    const restoredUser = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            isDeleted: false,
+            deletedAt: null,
+            otpHash: null,
+            otpExpiresAt: null,
+            otpAttempts: 0,       // 🔐 reset
+            otpLastSentAt: null, // 🔐 reset
+        },
+        select: userSafeSelect
+    });
+
+    // issue fresh tokens
+    const accessToken = generateAccessToken(restoredUser);
+    const refreshToken = generateRefreshToken(restoredUser);
+
+    const refreshedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: { refreshToken },
+        select: userSafeSelect
+    });
+
+    const cookieOptions = {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+    };
+
+    return res
+        .status(200)
+        .cookie("accessToken", accessToken, cookieOptions)
+        .cookie("refreshToken", refreshToken, cookieOptions)
+        .json(
+            new ApiResponse(
+                200,
+                refreshedUser,
+                "Account restored successfully"
+            )
+        );
+})
+
+
+

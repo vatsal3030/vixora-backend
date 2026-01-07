@@ -11,6 +11,9 @@ const userSafeSelect = {
 
   createdAt: true,
   updatedAt: true,
+
+  isDeleted:true,
+  deletedAt:true,
 };
 
 export default userSafeSelect;
