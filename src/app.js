@@ -34,7 +34,7 @@ app.use(helmet());
 
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",")
-  : ["http://localhost:5173","https://vidora-app.vercel.app"];
+  : ["http://localhost:5173","https://vixora-app.vercel.app"];
 
 app.use(
   cors({
@@ -92,7 +92,7 @@ app.use("/api/v1/auth", authRouter);
 app.get("/", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "Vidora Backend is running 🚀",
+    message: "Vixora Backend is running 🚀",
     version: "1.0.0"
   });
 });

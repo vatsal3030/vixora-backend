@@ -2,10 +2,10 @@ export const restoreOtpTemplate = ({
   fullName,
   otp
 }) => ({
-  subject: "Your Vidora Account Restore OTP",
+  subject: "Your Vixora Account Restore OTP",
   html: `
     <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-      <h2>Hi from Vidora 👋</h2>
+      <h2>Hi from Vixora 👋</h2>
       <p>Hi <strong>${fullName}</strong>,</p>
       <p>Your OTP for account restore is:</p>
       <h3 style="letter-spacing: 3px;">${otp}</h3>
@@ -20,14 +20,14 @@ export const emailVerificationOtpTemplate = ({
   fullName,
   otp,
 }) => ({
-  subject: "Verify your Vidora account",
+  subject: "Verify your Vixora account",
   html: `
   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px;">
-    <h2 style="color: #111;">Welcome to Vidora 👋</h2>
+    <h2 style="color: #111;">Welcome to Vixora 👋</h2>
 
     <p>Hi <strong>${fullName}</strong>,</p>
 
-    <p>Thank you for creating your Vidora account.  
+    <p>Thank you for creating your Vixora account.  
     Please verify your email address using the OTP below:</p>
 
     <div style="
@@ -54,17 +54,17 @@ export const emailVerificationOtpTemplate = ({
     </p>
 
     <p style="font-size: 12px; color: #666;">
-      © ${new Date().getFullYear()} Vidora
+      © ${new Date().getFullYear()} Vixora
     </p>
   </div>
   `,
 });
 
 export const welcomeEmailTemplate = ({ fullName }) => ({
-  subject: "Welcome to Vidora 🎉",
+  subject: "Welcome to Vixora 🎉",
   html: `
   <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px;">
-    <h2 style="color: #111;">Welcome to Vidora 🎬</h2>
+    <h2 style="color: #111;">Welcome to Vixora 🎬</h2>
 
     <p>Hi <strong>${fullName}</strong>,</p>
 
@@ -78,7 +78,7 @@ export const welcomeEmailTemplate = ({ fullName }) => ({
       <li>Explore trending content</li>
     </ul>
 
-    <p>We’re excited to have you on Vidora 🚀</p>
+    <p>We’re excited to have you on Vixora 🚀</p>
 
     <hr style="margin: 30px 0;" />
 
@@ -87,21 +87,21 @@ export const welcomeEmailTemplate = ({ fullName }) => ({
     </p>
 
     <p style="font-size: 12px; color: #666;">
-      © ${new Date().getFullYear()} Vidora
+      © ${new Date().getFullYear()} Vixora
     </p>
   </div>
   `,
 });
 
 export const forgotPasswordOtpTemplate = ({ fullName, otp }) => ({
-  subject: "Reset your Vidora password",
+  subject: "Reset your Vixora password",
   html: `
   <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto;">
     <h2>Password Reset Request 🔐</h2>
 
     <p>Hi <strong>${fullName}</strong>,</p>
 
-    <p>We received a request to reset your Vidora password.</p>
+    <p>We received a request to reset your Vixora password.</p>
 
     <div style="
       margin:20px 0;
@@ -121,7 +121,7 @@ export const forgotPasswordOtpTemplate = ({ fullName, otp }) => ({
 
     <hr />
     <p style="font-size:12px;color:#666">
-      © ${new Date().getFullYear()} Vidora
+      © ${new Date().getFullYear()} Vixora
     </p>
   </div>
   `,

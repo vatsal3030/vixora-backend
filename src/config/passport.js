@@ -63,7 +63,7 @@ passport.use(
                 if (googleAvatarUrl) {
                     const uploadedAvatar = await uploadOnCloudinary(
                         googleAvatarUrl,
-                        "vidora/avatars"
+                        "vixora/avatars"
                     );
 
                     avatar = uploadedAvatar?.secure_url || null;

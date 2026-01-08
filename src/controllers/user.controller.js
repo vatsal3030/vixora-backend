@@ -281,7 +281,7 @@ export const verifyEmail = asyncHandler(async (req, res) => {
             to: user.email,
             subject: mail.subject,
             html: mail.html,
-            text: "Welcome to Vidora",
+            text: "Welcome to Vixora",
         });
     } catch (err) {
         console.warn("Welcome email failed:", err.message);
