@@ -1,45 +1,74 @@
-import { Router } from 'express';
+import { Router } from "express";
 import {
-    addVideoToPlaylist,
-    createPlaylist,
-    deletePlaylist,
-    getPlaylistById,
-    getUserPlaylists,
-    removeVideoFromPlaylist,
-    togglePlaylistPublishStatus,
-    updatePlaylist,
-} from "../controllers/playlist.controller.js"
-import { verifyJwt } from "../middlewares/auth.middleware.js"
+   addVideoToPlaylist,
+   createPlaylist,
+   deletePlaylist,
+   getPlaylistById,
+   getUserPlaylists,
+   removeVideoFromPlaylist,
+   togglePlaylistPublishStatus,
+   updatePlaylist,
+   restorePlaylist,
+   getDeletedPlaylists,
+   toggleWatchLater,
+   getWatchLaterVideos,
+} from "../controllers/playlist.controller.js";
+import { verifyJwt } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-router.use(verifyJwt); // Apply verifyJWT middleware to all routes in this file
+// 🔐 Protect all routes
+router.use(verifyJwt);
 
-router.route("/")
-    .post(createPlaylist);
+/* ─────────────────────────────
+   WATCH LATER (KEEP FIRST)
+───────────────────────────── */
 
-// Get current user's playlists
-router.route("/user/me").get(async (req, res) => {
-    // Redirect to getUserPlaylists with current user's ID
-    req.params.userId = req.user.id;
-    return getUserPlaylists(req, res);
+router.post("/watch-later/:videoId", toggleWatchLater);
+router.get("/watch-later", getWatchLaterVideos);
+
+/* ─────────────────────────────
+   PLAYLIST CRUD
+───────────────────────────── */
+
+// Create playlist
+router.post("/", createPlaylist);
+
+// Current user's playlists
+router.get("/user/me", (req, res, next) => {
+   req.params.userId = req.user.id;
+   return getUserPlaylists(req, res, next);
 });
 
-router.route("/:playlistId")
-    .get(getPlaylistById)
-    .patch(updatePlaylist)
-    .delete(deletePlaylist);
+// ⚠️ Optional: remove or restrict this route
+router.get("/user/:userId", getUserPlaylists);
 
-// remain part to test
+/* ─────────────────────────────
+   TRASH & RESTORE
+───────────────────────────── */
+
+router.get("/trash/me", getDeletedPlaylists);
+router.patch("/:playlistId/restore", restorePlaylist);
+
+/* ─────────────────────────────
+   PLAYLIST VIDEO OPERATIONS
+───────────────────────────── */
 
 // Add / remove videos
-router.route("/add/:videoId/:playlistId").patch(addVideoToPlaylist);
-router.route("/remove/:videoId/:playlistId").patch(removeVideoFromPlaylist);
+router.patch("/add/:videoId/:playlistId", addVideoToPlaylist);
+router.patch("/remove/:videoId/:playlistId", removeVideoFromPlaylist);
 
-// User playlists
-router.route("/user/:userId").get(getUserPlaylists);
+// Toggle public / private
+router.patch("/:playlistId/toggle-visibility", togglePlaylistPublishStatus);
 
-// ✅ Toggle playlist public/private
-router.route("/:playlistId/toggle-visibility").patch(togglePlaylistPublishStatus);
+/* ─────────────────────────────
+   SINGLE PLAYLIST (KEEP LAST)
+───────────────────────────── */
 
-export default router
+router
+   .route("/:playlistId")
+   .get(getPlaylistById)
+   .patch(updatePlaylist)
+   .delete(deletePlaylist);
+
+export default router;

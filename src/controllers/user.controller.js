@@ -701,7 +701,6 @@ export const resetPassword = asyncHandler(async (req, res) => {
     );
 });
 
-
 export const getCurrentUser = asyncHandler(async (req, res) => {
     return res.
         status(200).

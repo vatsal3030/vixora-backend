@@ -120,36 +120,48 @@ export const getChannelPlaylists = asyncHandler(async (req, res) => {
     const playlists = await prisma.playlist.findMany({
         where: {
             ownerId: channelId,
-            isPublic: true
+            isPublic: true,
+            isDeleted: false
         },
         skip,
         take: Number(limit),
         orderBy: {
-            createdAt: "desc"
+            updatedAt: "desc"
         },
         select: {
             id: true,
             name: true,
             description: true,
-            createdAt: true,
-            _count: {
-                select: {
-                    videos: true
-                }
-            }
+            isPublic: true,
+            videoCount: true,
+            totalDuration: true,
+            updatedAt: true,
+            createdAt: true
         }
     });
 
     const total = await prisma.playlist.count({
         where: {
             ownerId: channelId,
-            isPublic: true
+            isPublic: true,
+            isDeleted: false
         }
     });
 
+    const formattedPlaylists = playlists.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        isPublic: p.isPublic,
+        videoCount: p.videoCount,
+        totalDuration: p.totalDuration,
+        updatedAt: p.updatedAt,
+        isWatchLater: p.name === "Watch Later"
+    }));
+
     return res.status(200).json(
         new ApiResponse(200, {
-            playlists,
+            playlists: formattedPlaylists,
             pagination: {
                 page: Number(page),
                 totalPages: Math.ceil(total / limit),

@@ -186,7 +186,6 @@ enum NotificationLevel {
   NONE
 }
 
-
 model Comment {
   id      String @id @default(uuid())
   content String
@@ -266,6 +265,11 @@ model Playlist {
   description String
   isPublic    Boolean @default(false)
 
+  // 🔥 METADATA
+  videoCount       Int       @default(0)
+  totalDuration    Int       @default(0) // seconds
+  lastVideoAddedAt DateTime?
+
   isDeleted Boolean   @default(false)
   deletedAt DateTime?
 
@@ -289,7 +293,10 @@ model PlaylistVideo {
   playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
   video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
+  createdAt DateTime @default(now()) // ⭐ REQUIRED FOR STACK ORDER
+
   @@id([playlistId, videoId])
+  @@index([playlistId, createdAt])
 }
 
 model Notification {

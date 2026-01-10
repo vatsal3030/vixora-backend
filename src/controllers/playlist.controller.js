@@ -2,6 +2,14 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
+import { getOrCreateWatchLater } from "../utils/getOrCreateWatchLaterPlaylist.js";
+
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
+const WATCH_LATER_NAME = "Watch Later";
+
+const isWatchLater = (playlist) => playlist.name === WATCH_LATER_NAME;
+
 
 export const createPlaylist = asyncHandler(async (req, res) => {
     const { name, description, isPublic = false } = req.body
@@ -48,14 +56,25 @@ export const getUserPlaylists = asyncHandler(async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    // build filter
+    // ✅ ALLOWED SORT FIELDS (security)
+    const allowedSortFields = ["createdAt", "updatedAt", "name"];
+    if (!allowedSortFields.includes(sortBy)) {
+        sortBy = "createdAt";
+    }
+
+    const isSelf = req.user.id === userId;
+
+
     const whereClause = {
         ownerId: userId,
+        isDeleted: false, // ✅ FIX: exclude deleted playlists
+        ...(isSelf ? {} : { isPublic: true, name: { not: WATCH_LATER_NAME } }),
     };
 
-    if (query && query.trim().length > 0) {
+    const trimmedQuery = query.trim();
+    if (trimmedQuery.length > 0) {
         whereClause.name = {
-            contains: query,
+            contains: trimmedQuery,
             mode: "insensitive",
         };
     }
@@ -70,7 +89,10 @@ export const getUserPlaylists = asyncHandler(async (req, res) => {
         select: {
             id: true,
             name: true,
-            description: true,
+            isPublic: true,
+            videoCount: true,
+            totalDuration: true,
+            lastVideoAddedAt: true,
             createdAt: true,
             updatedAt: true,
         },
@@ -80,11 +102,22 @@ export const getUserPlaylists = asyncHandler(async (req, res) => {
         where: whereClause,
     });
 
+    const formattedPlaylists = playlists.map(p => ({
+        id: p.id,
+        name: p.name,
+        isPublic: p.isPublic,
+        videoCount: p.videoCount,
+        totalDuration: p.totalDuration,
+        updatedAt: p.updatedAt,
+        isWatchLater: p.name === WATCH_LATER_NAME,
+    }));
+
+
     return res.status(200).json(
         new ApiResponse(
             200,
             {
-                playlists,
+                playlists: formattedPlaylists,
                 pagination: {
                     currentPage: page,
                     totalPages: Math.ceil(totalPlaylists / limit),
@@ -112,19 +145,24 @@ export const getPlaylistById = asyncHandler(async (req, res) => {
             isPublic: true,
             createdAt: true,
             updatedAt: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    avatar: true,
-                },
-            },
+            isDeleted: true,
+            ownerId: true,
+            totalDuration: true,
+            videoCount: true,
             videos: {
+                orderBy: {
+                    createdAt: "desc",
+                },
                 select: {
-                    id: true,
-                    title: true,
-                    thumbnail: true,
-                    duration: true,
+                    createdAt: true,
+                    video: {
+                        select: {
+                            id: true,
+                            title: true,
+                            thumbnail: true,
+                            duration: true,
+                        },
+                    },
                 },
             },
         },
@@ -134,16 +172,32 @@ export const getPlaylistById = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Playlist not found");
     }
 
-    // If playlist is private, only owner can access
-    if (!playlist.isPublic && playlist.owner.id !== req.user.id) {
+    if (playlist.isDeleted) {
+        throw new ApiError(404, "Playlist not found");
+    }
+
+    // 🔐 Private playlist check
+    if (!playlist.isPublic && playlist.ownerId !== req.user.id) {
         throw new ApiError(403, "This playlist is private");
     }
 
+    // 🔄 Optional: flatten response (recommended for frontend)
+
+    const formattedPlaylist = {
+        id: playlist.id,
+        name: playlist.name,
+        description: playlist.description,
+        isPublic: playlist.isPublic,
+        createdAt: playlist.createdAt,
+        updatedAt: playlist.updatedAt,
+        isWatchLater: playlist.name === WATCH_LATER_NAME,
+        videos: playlist.videos.map(v => v.video),
+    };
+
     return res.status(200).json(
-        new ApiResponse(200, playlist, "Playlist fetched successfully")
+        new ApiResponse(200, formattedPlaylist, "Playlist fetched successfully")
     );
 });
-
 
 export const addVideoToPlaylist = asyncHandler(async (req, res) => {
     const { videoId, playlistId } = req.params;
@@ -152,15 +206,16 @@ export const addVideoToPlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(400, "playlistId and videoId are required");
     }
 
-    // Fetch playlist with existing videos (only ids)
     const playlist = await prisma.playlist.findUnique({
         where: { id: playlistId },
         select: {
             id: true,
             ownerId: true,
+            isDeleted: true,
+            name: true,
             videos: {
-                where: { id: videoId },
-                select: { id: true },
+                where: { videoId },
+                select: { videoId: true },
             },
         },
     });
@@ -169,11 +224,18 @@ export const addVideoToPlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Playlist not found");
     }
 
+    if (playlist.isDeleted) {
+        throw new ApiError(404, "Playlist not found");
+    }
+
     if (playlist.ownerId !== req.user.id) {
         throw new ApiError(403, "You are not allowed to modify this playlist");
     }
 
-    // Check if video exists
+    if (isWatchLater(playlist)) {
+        throw new ApiError(403, "Use Watch Later toggle API");
+    }
+
     const videoExists = await prisma.video.findUnique({
         where: { id: videoId },
         select: { id: true },
@@ -183,27 +245,38 @@ export const addVideoToPlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Video not found");
     }
 
-    // Prevent duplicate add
     if (playlist.videos.length > 0) {
-        return res.status(200).json(
-            new ApiResponse(200, {}, "Video already in playlist")
-        );
+        return res
+            .status(200)
+            .json(new ApiResponse(200, {}, "Video already in playlist"));
     }
 
-    await prisma.playlist.update({
-        where: { id: playlistId },
-        data: {
-            videos: {
-                connect: { id: videoId },
+    // ✅ CORRECT WAY
+    await prisma.$transaction(async (tx) => {
+        const video = await tx.video.findUnique({
+            where: { id: videoId },
+            select: { duration: true },
+        });
+
+        await tx.playlistVideo.create({
+            data: { playlistId, videoId },
+        });
+
+        await tx.playlist.update({
+            where: { id: playlistId },
+            data: {
+                videoCount: { increment: 1 },
+                totalDuration: { increment: video.duration },
+                lastVideoAddedAt: new Date(),
             },
-        },
+        });
     });
 
-    return res.status(200).json(
-        new ApiResponse(200, {}, "Video added to playlist")
-    );
-});
 
+    return res
+        .status(200)
+        .json(new ApiResponse(200, {}, "Video added to playlist"));
+});
 
 export const removeVideoFromPlaylist = asyncHandler(async (req, res) => {
     const { videoId, playlistId } = req.params;
@@ -212,15 +285,16 @@ export const removeVideoFromPlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(400, "playlistId and videoId are required");
     }
 
-    // Fetch playlist + check ownership + check if video exists in playlist
     const playlist = await prisma.playlist.findUnique({
         where: { id: playlistId },
         select: {
             id: true,
             ownerId: true,
+            isDeleted: true,
+            name: true,
             videos: {
-                where: { id: videoId },
-                select: { id: true },
+                where: { videoId },
+                select: { videoId: true },
             },
         },
     });
@@ -229,47 +303,57 @@ export const removeVideoFromPlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Playlist not found");
     }
 
+    if (playlist.isDeleted) {
+        throw new ApiError(404, "Playlist not found");
+    }
+
+
     if (playlist.ownerId !== req.user.id) {
         throw new ApiError(403, "You are not allowed to modify this playlist");
     }
 
-    // If video is not in playlist
     if (playlist.videos.length === 0) {
-        return res.status(200).json(
-            new ApiResponse(200, {}, "Video is not in this playlist")
-        );
+        return res
+            .status(200)
+            .json(new ApiResponse(200, {}, "Video is not in this playlist"));
     }
 
-    // ✅ Remove video from playlist
-    await prisma.playlist.update({
-        where: { id: playlistId },
-        data: {
-            videos: {
-                disconnect: { id: videoId },
+    // ✅ CORRECT: delete junction row
+    await prisma.$transaction(async (tx) => {
+        const video = await tx.video.findUnique({
+            where: { id: videoId },
+            select: { duration: true },
+        });
+
+        await tx.playlistVideo.delete({
+            where: { playlistId_videoId: { playlistId, videoId } },
+        });
+
+        await tx.playlist.update({
+            where: { id: playlistId },
+            data: {
+                videoCount: { decrement: 1 },
+                totalDuration: { decrement: video.duration },
             },
-        },
+        });
     });
 
-    return res.status(200).json(
-        new ApiResponse(200, {}, "Video removed from playlist")
-    );
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, {}, "Video removed from playlist"));
 });
 
-
 export const deletePlaylist = asyncHandler(async (req, res) => {
-    const { playlistId } = req.params
-    // TODO: delete playlist
+    const { playlistId } = req.params;
+
     if (!playlistId) {
         throw new ApiError(400, "playlistId is required");
     }
 
-    // Fetch playlist + check ownership 
     const playlist = await prisma.playlist.findUnique({
         where: { id: playlistId },
-        select: {
-            id: true,
-            ownerId: true,
-        },
+        select: { id: true, ownerId: true, isDeleted: true, name: true },
     });
 
     if (!playlist) {
@@ -280,17 +364,91 @@ export const deletePlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(403, "You are not allowed to delete this playlist");
     }
 
-    await prisma.playlist.delete({
-        where: {
-            id: playlistId
-        }
-    })
+    if (isWatchLater(playlist)) {
+        throw new ApiError(403, "Watch Later playlist cannot be deleted");
+    }
+
+
+    if (playlist.isDeleted) {
+        return res
+            .status(200)
+            .json(new ApiResponse(200, {}, "Playlist already deleted"));
+    }
+
+    await prisma.playlist.update({
+        where: { id: playlistId },
+        data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+        },
+    });
 
     return res.status(200).json(
-        new ApiResponse(200, {}, "Playlist deleted successfully")
+        new ApiResponse(200, {}, "Playlist moved to trash")
     );
+});
 
-})
+export const restorePlaylist = asyncHandler(async (req, res) => {
+    const { playlistId } = req.params;
+
+    const playlist = await prisma.playlist.findUnique({
+        where: { id: playlistId },
+        select: {
+            id: true,
+            ownerId: true,
+            isDeleted: true,
+            deletedAt: true,
+        },
+    });
+
+    if (!playlist || !playlist.isDeleted || !playlist.deletedAt) {
+        throw new ApiError(404, "Deleted playlist not found");
+    }
+
+    if (playlist.ownerId !== req.user.id) {
+        throw new ApiError(403, "You are not allowed to restore this playlist");
+    }
+
+    const restoreDeadline = playlist.deletedAt.getTime() + SEVEN_DAYS;
+    if (Date.now() > restoreDeadline) {
+        throw new ApiError(403, "Restore window expired");
+    }
+
+    await prisma.playlist.update({
+        where: { id: playlistId },
+        data: {
+            isDeleted: false,
+            deletedAt: null,
+        },
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Playlist restored successfully")
+    );
+});
+
+export const getDeletedPlaylists = asyncHandler(async (req, res) => {
+    const playlists = await prisma.playlist.findMany({
+        where: {
+            ownerId: req.user.id,
+            isDeleted: true,
+            deletedAt: {
+                gte: new Date(Date.now() - SEVEN_DAYS),
+            },
+        },
+        orderBy: { deletedAt: "desc" },
+        select: {
+            id: true,
+            name: true,
+            description: true,
+            deletedAt: true,
+        },
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, playlists, "Deleted playlists fetched")
+    );
+});
 
 export const updatePlaylist = asyncHandler(async (req, res) => {
     const { playlistId } = req.params;
@@ -311,6 +469,8 @@ export const updatePlaylist = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
+            isDeleted: true,
+            name: true,
         },
     });
 
@@ -318,8 +478,16 @@ export const updatePlaylist = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Playlist not found");
     }
 
+    if (playlist.isDeleted) {
+        throw new ApiError(404, "Playlist not found");
+    }
+
     if (playlist.ownerId !== req.user.id) {
         throw new ApiError(403, "You are not allowed to update this playlist");
+    }
+
+    if (isWatchLater(playlist)) {
+        throw new ApiError(403, "Watch Later playlist cannot be modified");
     }
 
     const updatedPlaylist = await prisma.playlist.update({
@@ -335,7 +503,6 @@ export const updatePlaylist = asyncHandler(async (req, res) => {
     );
 });
 
-
 export const togglePlaylistPublishStatus = asyncHandler(async (req, res) => {
     const { playlistId } = req.params;
 
@@ -350,12 +517,24 @@ export const togglePlaylistPublishStatus = asyncHandler(async (req, res) => {
             id: true,
             ownerId: true,
             isPublic: true,
+            isDeleted: true,
+            name: true,
         },
     });
+
 
     if (!playlist) {
         throw new ApiError(404, "Playlist not found");
     }
+
+    if (isWatchLater(playlist)) {
+        throw new ApiError(403, "Watch Later playlist must remain private");
+    }
+
+    if (playlist.isDeleted) {
+        throw new ApiError(404, "Playlist not found");
+    }
+
 
     // Ownership check
     if (playlist.ownerId !== req.user.id) {
@@ -380,3 +559,139 @@ export const togglePlaylistPublishStatus = asyncHandler(async (req, res) => {
         )
     );
 });
+
+export const toggleWatchLater = asyncHandler(async (req, res) => {
+    const { videoId } = req.params;
+    const userId = req.user.id;
+
+    if (!videoId) throw new ApiError(400, "videoId is required");
+
+    const playlistId = await getOrCreateWatchLater(userId);
+
+    const result = await prisma.$transaction(async (tx) => {
+        const video = await tx.video.findUnique({
+            where: { id: videoId },
+            select: { duration: true },
+        });
+
+        if (!video) throw new ApiError(404, "Video not found");
+
+        const exists = await tx.playlistVideo.findUnique({
+            where: { playlistId_videoId: { playlistId, videoId } },
+        });
+
+        if (exists) {
+            await tx.playlistVideo.delete({
+                where: { playlistId_videoId: { playlistId, videoId } },
+            });
+
+            await tx.playlist.update({
+                where: { id: playlistId },
+                data: {
+                    videoCount: { decrement: 1 },
+                    totalDuration: { decrement: video.duration },
+                },
+            });
+
+            return { saved: false };
+        }
+
+        await tx.playlistVideo.create({
+            data: { playlistId, videoId },
+        });
+
+        await tx.playlist.update({
+            where: { id: playlistId },
+            data: {
+                videoCount: { increment: 1 },
+                totalDuration: { increment: video.duration },
+                lastVideoAddedAt: new Date(),
+            },
+        });
+
+        return { saved: true };
+    });
+
+    return res
+        .status(200)
+        .json(
+            new ApiResponse(
+                200,
+                result,
+                result.saved ? "Added to Watch Later" : "Removed from Watch Later"
+            )
+        );
+});
+
+export const getWatchLaterVideos = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+
+    const playlist = await prisma.playlist.findFirst({
+        where: {
+            ownerId: userId,
+            name: WATCH_LATER_NAME,
+            isDeleted: false,
+        },
+        select: {
+            id: true,
+            videoCount: true,
+            totalDuration: true,
+            lastVideoAddedAt: true,
+            videos: {
+                orderBy: {
+                    createdAt: "desc",
+                },
+                select: {
+                    video: {
+                        select: {
+                            id: true,
+                            title: true,
+                            thumbnail: true,
+                            duration: true,
+                            views: true,
+                            createdAt: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+
+    if (!playlist) {
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    videos: [],
+                    metadata: {
+                        videoCount: 0,
+                        totalDuration: 0,
+                        lastVideoAddedAt: null,
+                    },
+                },
+                "No watch later videos"
+            )
+        );
+    }
+
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            {
+                videos: playlist.videos.map(v => v.video),
+                metadata: {
+                    videoCount: playlist.videoCount,
+                    totalDuration: playlist.totalDuration,
+                    lastVideoAddedAt: playlist.lastVideoAddedAt,
+                },
+            },
+            "Watch later videos fetched"
+        )
+    );
+
+});
+
+
+
