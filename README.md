@@ -243,7 +243,7 @@ Client Response
 1. **Clone the repository**
 
 ```bash
-git clone https://github.com/yourusername/vixora-backend.git
+git clone https://github.com/vatsal3030/vixora-backend.git
 cd vixora-backend
 ```
 
@@ -545,7 +545,7 @@ This project is licensed under the ISC License.
 
 ## 👥 Authors
 
-- **Your Name** - [GitHub](https://github.com/yourusername)
+- **Vatsal Vadgama** - [GitHub](https://github.com/vatsal3030)
 
 ---
 
