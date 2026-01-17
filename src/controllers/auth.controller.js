@@ -23,11 +23,16 @@ export const googleAuthCallback = asyncHandler(async (req, res, next) => {
     passport.authenticate(
         "google",
         { session: false },
-        async (err, user) => {
+        async (err, user, info) => {
             try {
-                if (err || !user) {
+                if (err) {
+                    return next(err); // real server error
+                }
+
+                if (!user) {
+                    const reason = info?.message || "google_auth_failed";
                     return res.redirect(
-                        `${process.env.FRONTEND_URL}/login?error=google_auth_failed`
+                        `${process.env.FRONTEND_URL}/login?error=${encodeURIComponent(reason)}`
                     );
                 }
 
@@ -45,10 +50,12 @@ export const googleAuthCallback = asyncHandler(async (req, res, next) => {
                     data: { refreshToken },
                 });
 
+                const isProduction = process.env.NODE_ENV === "production";
+
                 const cookieOptions = {
                     httpOnly: true,
-                    secure: true,
-                    sameSite: "none",
+                    secure: isProduction,              // ✅ false on localhost
+                    sameSite: isProduction ? "none" : "lax",
                 };
 
                 return res

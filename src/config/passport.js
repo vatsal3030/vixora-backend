@@ -1,8 +1,7 @@
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import prisma from "../db/prisma.js";
-import ApiError from "../utils/ApiError.js";
-import uploadOnCloudinary  from "../utils/cloudinary.js";
+import uploadOnCloudinary from "../utils/cloudinary.js";
 
 passport.use(
     new GoogleStrategy(
@@ -19,7 +18,9 @@ passport.use(
                 const googleAvatarUrl = profile.photos?.[0]?.value;
 
                 if (!email) {
-                    return done(new ApiError(400, "Google account has no email"));
+                    return done(null, false, {
+                        message: "Google account has no email",
+                    });
                 }
 
                 // 1️⃣ Existing Google user
@@ -32,31 +33,25 @@ passport.use(
 
                 if (user) {
                     if (user.isDeleted) {
-                        return done(
-                            new ApiError(
-                                403,
-                                "Account deleted. Please restore your account."
-                            )
-                        );
+                        return done(null, false, {
+                            message: "Account deleted. Please restore.",
+                        });
                     }
                     return done(null, user);
                 }
 
-                // 2️⃣ Email collision check (LOCAL user safety)
+                // 2️⃣ Email collision (LOCAL account exists)
                 const existingEmailUser = await prisma.user.findUnique({
                     where: { email },
                 });
 
                 if (existingEmailUser) {
-                    return done(
-                        new ApiError(
-                            409,
-                            "Email already registered using password. Please login normally."
-                        )
-                    );
+                    return done(null, false, {
+                        message: "Email already registered using password",
+                    });
                 }
 
-                // 3️⃣ Upload Google avatar to Cloudinary (ONE TIME)
+                // 3️⃣ Upload avatar (optional)
                 let avatar = null;
                 let avatarPublicId = null;
 
@@ -65,12 +60,11 @@ passport.use(
                         googleAvatarUrl,
                         "vixora/avatars"
                     );
-
                     avatar = uploadedAvatar?.secure_url || null;
                     avatarPublicId = uploadedAvatar?.public_id || null;
                 }
 
-                // 4️⃣ Create new Google user
+                // 4️⃣ Create Google user
                 user = await prisma.user.create({
                     data: {
                         fullName,
@@ -85,8 +79,8 @@ passport.use(
                 });
 
                 return done(null, user);
-            } catch (err) {
-                return done(err);
+            } catch (error) {
+                return done(error); // REAL server error only
             }
         }
     )
