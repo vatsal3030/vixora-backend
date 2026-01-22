@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.2.0",
-    "@prisma/client": "^7.2.0",
+    "@prisma/client": "^7.3.0",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^1.41.3",
     "cookie-parser": "^1.4.7",
@@ -48,6 +48,6 @@
     "@types/express": "^5.0.6",
     "cross-env": "^7.0.3",
     "nodemon": "^3.0.2",
-    "prisma": "^7.2.0"
+    "prisma": "^7.3.0"
   }
 }

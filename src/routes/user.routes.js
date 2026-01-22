@@ -6,7 +6,6 @@ import {
     getCurrentUser,
     getUserChannelProfile,
     getUserById,
-    getWatchHistory,
     loginUser, logOutUser,
     refreshAccessToken,
     updateAccountDetails,
@@ -60,7 +59,6 @@ router.route("/update-description").patch(verifyJwt, updateChannelDescription)
 
 router.route("/u/:username").get(verifyJwt, getUserChannelProfile)
 router.route("/id/:userId").get(verifyJwt, getUserById)
-router.route("/History").get(verifyJwt, getWatchHistory)
 
 router.route("/delete-account").delete(verifyJwt, deleteAccount)
 router.route("/restore-account/request").patch( restoreAccountRequest)
