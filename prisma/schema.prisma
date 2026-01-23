@@ -1,484 +1,399 @@
-  generator client {
-    provider = "prisma-client-js"
-  }
-
-  datasource db {
-    provider = "postgresql"
-  }
-
-  model User {
-    id       String  @id @default(uuid())
-    username String? @unique
-    email    String? @unique
-    fullName String
-
-    isDeleted Boolean   @default(false)
-    deletedAt DateTime?
-
-    avatar     String?
-    coverImage String?
-
-    password     String?
-    refreshToken String?
-    authProvider AuthProvider @default(LOCAL)
-    providerId   String?
-
-    emailVerified Boolean @default(false)
-
-    otpHash       String?
-    otpExpiresAt  DateTime?
-    otpAttempts   Int       @default(0)
-    otpLastSentAt DateTime?
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    avatarPublicId     String?
-    coverImagePublicId String?
-
-    // 🔥 Channel Info
-    channelDescription String?
-    channelLinks       Json?
-    channelCategories  ChannelCategory[]
-    settings           UserSettings?
-
-    subscribers   Subscription[] @relation("UserSubscribers")
-    subscriptions Subscription[] @relation("UserSubscriptions")
-
-    videos Video[] @relation("VideoOwner")
-
-    watchHistory WatchHistory[] @relation("UserWatchHistory")
-
-    sentNotifications Notification[] @relation("NotificationSender")
-
-    notifications Notification[] @relation("UserNotifications")
-
-    comments   Comment[]
-    likes      Like[]
-    tweets     Tweet[]
-    playlists  Playlist[]
-    feedScores FeedScore[]
-
-    @@index([username])
-    @@index([email])
-    @@index([isDeleted])
-  }
-
-  model Tag {
-    id   String @id @default(uuid())
-    name String @unique
-
-    videos VideoTag[]
-
-    @@index([name])
-  }
-
-  model VideoTag {
-    videoId String
-    tagId   String
-
-    video Video @relation(fields: [videoId], references: [id])
-    tag   Tag   @relation(fields: [tagId], references: [id])
-
-    @@id([videoId, tagId])
-  }
-
-  model Video {
-    id          String  @id @default(uuid())
-    videoFile   String
-    thumbnail   String
-    title       String
-    description String
-    duration    Int
-    views       Int     @default(0)
-    isPublished Boolean @default(true)
-    isShort     Boolean @default(false)
-
-    isDeleted Boolean   @default(false)
-    deletedAt DateTime?
-
-    aspectRatio String? // "9:16" or "16:9"
-    summary     String? // AI-generated summary
-
-    ownerId String
-    owner   User   @relation("VideoOwner", fields: [ownerId], references: [id])
-
-    tags VideoTag[] // ✅ ADD THIS
-
-    watchHistory WatchHistory[] @relation("VideoWatchHistory")
-
-    playlistVideos PlaylistVideo[]
-
-    comments Comment[]
-    likes    Like[]
-
-    shareCount      Int   @default(0)
-    popularityScore Float @default(0)
-    engagementScore Float @default(0)
-
-    thumbnailPublicId String
-    videoPublicId     String
-
-    createdAt     DateTime        @default(now())
-    updatedAt     DateTime        @updatedAt
-    feedScores    FeedScore[]
-    notifications Notification[]
-    categories    VideoCategory[]
-
-    @@index([ownerId])
-    @@index([isPublished])
-    @@index([isPublished, createdAt])
-    @@index([views])
-    @@index([popularityScore])
-    @@index([updatedAt])
-    @@index([createdAt])
-    @@index([isDeleted])
-    @@index([isDeleted, isPublished, createdAt])
-    @@index([isDeleted, ownerId, createdAt])
-    @@index([ownerId, isDeleted, deletedAt])
-  }
-
-  model Category {
-    id       String  @id @default(uuid())
-    name     String  @unique
-    slug     String  @unique
-    icon     String? // optional (UI)
-    isActive Boolean @default(true)
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    channels ChannelCategory[]
-    videos   VideoCategory[]
-
-    @@index([slug])
-  }
-
-  model ChannelCategory {
-    userId     String
-    categoryId String
-
-    user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-    category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-    @@id([userId, categoryId])
-    @@index([categoryId])
-    @@index([userId])
-  }
-
-  model VideoCategory {
-    videoId    String
-    categoryId String
-
-    video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
-    category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-    @@id([videoId, categoryId])
-    @@index([categoryId, videoId])
-    @@index([categoryId])
-    @@index([videoId])
-  }
-
-  model WatchHistory {
-    id      String @id @default(uuid())
-    userId  String
-    videoId String
-
-    progress      Int
-    duration      Int
-    completed     Boolean  @default(false)
-    watchCount    Int      @default(1)
-    lastWatchedAt DateTime @default(now())
-
-    updatedAt DateTime @updatedAt
-    createdAt DateTime @default(now())
-
-    user  User  @relation("UserWatchHistory", fields: [userId], references: [id], onDelete: Cascade)
-    video Video @relation("VideoWatchHistory", fields: [videoId], references: [id], onDelete: Cascade)
-
-    @@unique([userId, videoId])
-    @@index([userId])
-    @@index([videoId])
-    @@index([lastWatchedAt])
-    @@index([userId, updatedAt])
-  }
-
-  model Subscription {
-    id           String @id @default(uuid())
-    subscriberId String
-    channelId    String
-
-    channel    User @relation("UserSubscribers", fields: [channelId], references: [id])
-    subscriber User @relation("UserSubscriptions", fields: [subscriberId], references: [id])
-
-    notificationLevel NotificationLevel @default(PERSONALIZED)
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@unique([subscriberId, channelId])
-    @@index([channelId])
-    @@index([subscriberId])
-  }
-
-  enum NotificationLevel {
-    ALL
-    PERSONALIZED
-    NONE
-  }
-
-  model Comment {
-    id      String @id @default(uuid())
-    content String
-
-    videoId String
-    ownerId String
-
-    video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
-    owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
-    likes Like[]
-
-    isDeleted Boolean   @default(false)
-    deletedAt DateTime?
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-    tweet     Tweet?   @relation(fields: [tweetId], references: [id])
-    tweetId   String?
-
-    @@index([videoId])
-    @@index([ownerId])
-    @@index([updatedAt])
-    @@index([createdAt])
-  }
-
-  model Like {
-    id String @id @default(uuid())
-
-    likedById String
-    likedBy   User   @relation(fields: [likedById], references: [id], onDelete: Cascade)
-
-    videoId   String?
-    commentId String?
-    tweetId   String?
-
-    video   Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
-    comment Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
-    tweet   Tweet?   @relation(fields: [tweetId], references: [id], onDelete: Cascade)
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@unique([likedById, videoId])
-    @@unique([likedById, commentId])
-    @@unique([likedById, tweetId])
-  }
-
-  model Tweet {
-    id      String @id @default(uuid())
-    content String
-
-    image   String? // optional image (Cloudinary URL)
-    imageId String? // Cloudinary public_id (for deletion)
-
-    ownerId String
-    owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
-    likes    Like[]
-    comments Comment[]
-
-    isDeleted Boolean   @default(false)
-    deletedAt DateTime?
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@index([ownerId])
-    @@index([updatedAt])
-    @@index([createdAt])
-    @@index([isDeleted, ownerId, createdAt])
-  }
-
-  model ShareEvent {
-    id      String @id @default(uuid())
-    userId  String?
-    videoId String
-    platform String? // whatsapp, link, twitter
-    createdAt DateTime @default(now())
-  }
-
-  model NotInterested {
-    id      String @id @default(uuid())
-    userId  String
-    videoId String
-    reason  String?
-
-    createdAt DateTime @default(now())
-
-    @@unique([userId, videoId])
-    @@index([userId])
-  }
-
-  model BlockedChannel {
-    id        String @id @default(uuid())
-    userId    String   // who blocked
-    channelId String   // channel being blocked
-
-    createdAt DateTime @default(now())
-
-    @@unique([userId, channelId])
-    @@index([userId])
-  }
-
-
-  model Playlist {
-    id          String  @id @default(uuid())
-    name        String
-    description String
-    isPublic    Boolean @default(false)
-    isSystem    Boolean @default(false)
-
-    // 🔥 METADATA
-    videoCount       Int       @default(0)
-    totalDuration    Int       @default(0) // seconds
-    lastVideoAddedAt DateTime?
-
-    isDeleted Boolean   @default(false)
-    deletedAt DateTime?
-
-    ownerId String
-    owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
-    videos PlaylistVideo[]
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    @@index([ownerId])
-    @@index([isDeleted])
-    @@index([isDeleted, ownerId, createdAt])
-  }
-
-  model PlaylistVideo {
-    playlistId String
-    videoId    String
-
-    playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
-    video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
-
-    createdAt DateTime @default(now()) // ⭐ REQUIRED FOR STACK ORDER
-
-    @@id([playlistId, videoId])
-    @@index([playlistId, createdAt])
-  }
-
-  model Notification {
-    id String @id @default(uuid())
-
-    userId   String
-    senderId String?
-    videoId  String?
-
-    user   User   @relation("UserNotifications", fields: [userId], references: [id])
-    sender User?  @relation("NotificationSender", fields: [senderId], references: [id])
-    video  Video? @relation(fields: [videoId], references: [id])
-
-    type    NotificationType @default(UPLOAD)
-    title   String
-    message String
-    data    Json?
-
-    isRead    Boolean  @default(false)
-    createdAt DateTime @default(now())
-
-    @@index([userId])
-    @@index([userId, isRead])
-  }
-
-  enum NotificationType {
-    COMMENT
-    LIKE
-    SUBSCRIPTION
-    UPLOAD
-    MENTION
-    SYSTEM
-  }
-
-  model FeedScore {
-    id      String @id @default(uuid())
-    userId  String
-    videoId String
-
-    // Final score
-    score Float
-
-    // 🔹 Score components
-    interestScore   Float @default(0) // categories, tags
-    engagementScore Float @default(0) // likes, comments, watch %
-    freshnessScore  Float @default(0) // recency decay
-    socialScore     Float @default(0) // subscribed channels
-
-    reason String?
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-    video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
-
-    @@unique([userId, videoId])
-    @@index([userId])
-    @@index([userId, score])
-  }
-
-  enum AuthProvider {
-    LOCAL
-    GOOGLE
-    GITHUB
-    FACEBOOK
-  }
-
-  model UserSettings {
-    id     String @id @default(uuid())
-    userId String @unique
-
-    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-    // Privacy Settings
-    profileVisibility ProfileVisibility @default(PUBLIC)
-    showSubscriptions Boolean           @default(true)
-    showLikedVideos   Boolean           @default(true)
-    allowComments     Boolean           @default(true)
-    allowMentions     Boolean           @default(true)
-
-    // Notification Settings
-    emailNotifications        Boolean @default(true)
-    commentNotifications      Boolean @default(true)
-    subscriptionNotifications Boolean @default(true)
-    systemAnnouncements       Boolean @default(true)
-
-    // Playback Settings
-    autoplayNext         Boolean @default(true)
-    defaultPlaybackSpeed Float   @default(1.0)
-    saveWatchHistory     Boolean @default(true)
-
-    // Display Settings
-    showProgressBar   Boolean @default(true)
-    showViewCount     Boolean @default(true)
-    showVideoDuration Boolean @default(true)
-    showChannelName   Boolean @default(true)
-
-    // Content Settings
-    personalizeRecommendations Boolean @default(true)
-    showTrending               Boolean @default(true)
-    hideShorts                 Boolean @default(false)
-
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-  }
-
-  enum ProfileVisibility {
-    PUBLIC
-    PRIVATE
-  }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id                 String            @id @default(uuid())
+  username           String?           @unique
+  email              String?           @unique
+  fullName           String
+  avatar             String?
+  coverImage         String?
+  password           String?
+  refreshToken       String?
+  authProvider       AuthProvider      @default(LOCAL)
+  providerId         String?
+  emailVerified      Boolean           @default(false)
+  otpHash            String?
+  otpExpiresAt       DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  avatarPublicId     String?
+  coverImagePublicId String?
+  channelDescription String?
+  channelLinks       Json?
+  deletedAt          DateTime?
+  isDeleted          Boolean           @default(false)
+  otpAttempts        Int               @default(0)
+  otpLastSentAt      DateTime?
+  channelCategories  ChannelCategory[]
+  comments           Comment[]
+  feedScores         FeedScore[]
+  likes              Like[]
+  sentNotifications  Notification[]    @relation("NotificationSender")
+  notifications      Notification[]    @relation("UserNotifications")
+  playlists          Playlist[]
+  subscribers        Subscription[]    @relation("UserSubscribers")
+  subscriptions      Subscription[]    @relation("UserSubscriptions")
+  tweets             Tweet[]
+  settings           UserSettings?
+  videos             Video[]           @relation("VideoOwner")
+  watchHistory       WatchHistory[]    @relation("UserWatchHistory")
+
+  @@index([username])
+  @@index([email])
+  @@index([isDeleted])
+}
+
+model Tag {
+  id     String     @id @default(uuid())
+  name   String     @unique
+  videos VideoTag[]
+
+  @@index([name])
+}
+
+model VideoTag {
+  videoId String
+  tagId   String
+  tag     Tag    @relation(fields: [tagId], references: [id])
+  video   Video  @relation(fields: [videoId], references: [id])
+
+  @@id([videoId, tagId])
+}
+
+model Video {
+  id                String          @id @default(uuid())
+  videoFile         String
+  thumbnail         String
+  title             String
+  description       String
+  duration          Int
+  views             Int             @default(0)
+  isPublished       Boolean         @default(true)
+  ownerId           String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  thumbnailPublicId String
+  videoPublicId     String
+  aspectRatio       String?
+  isShort           Boolean         @default(false)
+  summary           String?
+  engagementScore   Float           @default(0)
+  popularityScore   Float           @default(0)
+  shareCount        Int             @default(0)
+  deletedAt         DateTime?
+  isDeleted         Boolean         @default(false)
+  comments          Comment[]
+  feedScores        FeedScore[]
+  likes             Like[]
+  notifications     Notification[]
+  playlistVideos    PlaylistVideo[]
+  owner             User            @relation("VideoOwner", fields: [ownerId], references: [id])
+  categories        VideoCategory[]
+  tags              VideoTag[]
+  watchHistory      WatchHistory[]  @relation("VideoWatchHistory")
+
+  @@index([ownerId])
+  @@index([isPublished])
+  @@index([isPublished, createdAt])
+  @@index([views])
+  @@index([popularityScore])
+  @@index([updatedAt])
+  @@index([createdAt])
+  @@index([isDeleted])
+  @@index([isDeleted, isPublished, createdAt])
+  @@index([isDeleted, ownerId, createdAt])
+  @@index([ownerId, isDeleted, deletedAt])
+}
+
+model Category {
+  id        String            @id @default(uuid())
+  name      String            @unique
+  slug      String            @unique
+  icon      String?
+  isActive  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  channels  ChannelCategory[]
+  videos    VideoCategory[]
+
+  @@index([slug])
+}
+
+model ChannelCategory {
+  userId     String
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, categoryId])
+  @@index([categoryId])
+  @@index([userId])
+}
+
+model VideoCategory {
+  videoId    String
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@id([videoId, categoryId])
+  @@index([categoryId, videoId])
+  @@index([categoryId])
+  @@index([videoId])
+}
+
+model WatchHistory {
+  id            String   @id @default(uuid())
+  userId        String
+  videoId       String
+  progress      Int
+  duration      Int
+  completed     Boolean  @default(false)
+  watchCount    Int      @default(1)
+  lastWatchedAt DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  user          User     @relation("UserWatchHistory", fields: [userId], references: [id], onDelete: Cascade)
+  video         Video    @relation("VideoWatchHistory", fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+  @@index([lastWatchedAt])
+  @@index([userId, updatedAt])
+}
+
+model Subscription {
+  id                String            @id @default(uuid())
+  subscriberId      String
+  channelId         String
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  notificationLevel NotificationLevel @default(PERSONALIZED)
+  channel           User              @relation("UserSubscribers", fields: [channelId], references: [id])
+  subscriber        User              @relation("UserSubscriptions", fields: [subscriberId], references: [id])
+
+  @@unique([subscriberId, channelId])
+  @@index([channelId])
+  @@index([subscriberId])
+}
+
+model Comment {
+  id        String    @id @default(uuid())
+  content   String
+  videoId   String
+  ownerId   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  tweetId   String?
+  deletedAt DateTime?
+  isDeleted Boolean   @default(false)
+  owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tweet     Tweet?    @relation(fields: [tweetId], references: [id])
+  video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  likes     Like[]
+
+  @@index([videoId])
+  @@index([ownerId])
+  @@index([updatedAt])
+  @@index([createdAt])
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  likedById String
+  videoId   String?
+  commentId String?
+  tweetId   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  comment   Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  likedBy   User     @relation(fields: [likedById], references: [id], onDelete: Cascade)
+  tweet     Tweet?   @relation(fields: [tweetId], references: [id], onDelete: Cascade)
+  video     Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([likedById, videoId])
+  @@unique([likedById, commentId])
+  @@unique([likedById, tweetId])
+}
+
+model Tweet {
+  id        String    @id @default(uuid())
+  content   String
+  ownerId   String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  image     String?
+  imageId   String?
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  comments  Comment[]
+  likes     Like[]
+  owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([updatedAt])
+  @@index([createdAt])
+  @@index([isDeleted, ownerId, createdAt])
+}
+
+model ShareEvent {
+  id        String   @id @default(uuid())
+  userId    String?
+  videoId   String
+  platform  String?
+  createdAt DateTime @default(now())
+}
+
+model NotInterested {
+  id        String   @id @default(uuid())
+  userId    String
+  videoId   String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, videoId])
+  @@index([userId])
+}
+
+model BlockedChannel {
+  id        String   @id @default(uuid())
+  userId    String
+  channelId String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, channelId])
+  @@index([userId])
+}
+
+model Playlist {
+  id               String          @id @default(uuid())
+  name             String
+  description      String
+  ownerId          String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  isPublic         Boolean         @default(false)
+  deletedAt        DateTime?
+  isDeleted        Boolean         @default(false)
+  lastVideoAddedAt DateTime?
+  totalDuration    Int             @default(0)
+  videoCount       Int             @default(0)
+  isSystem         Boolean         @default(false)
+  owner            User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  videos           PlaylistVideo[]
+
+  @@index([ownerId])
+  @@index([isDeleted])
+  @@index([isDeleted, ownerId, createdAt])
+}
+
+model PlaylistVideo {
+  playlistId String
+  videoId    String
+  createdAt  DateTime @default(now())
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@id([playlistId, videoId])
+  @@index([playlistId, createdAt])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  data      Json?
+  message   String
+  senderId  String?
+  title     String
+  type      NotificationType @default(UPLOAD)
+  videoId   String?
+  sender    User?            @relation("NotificationSender", fields: [senderId], references: [id])
+  user      User             @relation("UserNotifications", fields: [userId], references: [id])
+  video     Video?           @relation(fields: [videoId], references: [id])
+
+  @@index([userId])
+  @@index([userId, isRead])
+}
+
+model FeedScore {
+  id              String   @id @default(uuid())
+  userId          String
+  videoId         String
+  score           Float
+  reason          String?
+  createdAt       DateTime @default(now())
+  engagementScore Float    @default(0)
+  freshnessScore  Float    @default(0)
+  interestScore   Float    @default(0)
+  socialScore     Float    @default(0)
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video           Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([userId, score])
+}
+
+model UserSettings {
+  id                         String            @id @default(uuid())
+  userId                     String            @unique
+  profileVisibility          ProfileVisibility @default(PUBLIC)
+  showSubscriptions          Boolean           @default(true)
+  showLikedVideos            Boolean           @default(true)
+  allowComments              Boolean           @default(true)
+  allowMentions              Boolean           @default(true)
+  emailNotifications         Boolean           @default(true)
+  commentNotifications       Boolean           @default(true)
+  subscriptionNotifications  Boolean           @default(true)
+  systemAnnouncements        Boolean           @default(true)
+  autoplayNext               Boolean           @default(true)
+  defaultPlaybackSpeed       Float             @default(1.0)
+  saveWatchHistory           Boolean           @default(true)
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+  hideShorts                 Boolean           @default(false)
+  personalizeRecommendations Boolean           @default(true)
+  showChannelName            Boolean           @default(true)
+  showProgressBar            Boolean           @default(true)
+  showTrending               Boolean           @default(true)
+  showVideoDuration          Boolean           @default(true)
+  showViewCount              Boolean           @default(true)
+  user                       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum NotificationLevel {
+  ALL
+  PERSONALIZED
+  NONE
+}
+
+enum NotificationType {
+  COMMENT
+  LIKE
+  SUBSCRIPTION
+  UPLOAD
+  MENTION
+  SYSTEM
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  GITHUB
+  FACEBOOK
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  PRIVATE
+}

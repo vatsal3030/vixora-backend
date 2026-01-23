@@ -34,7 +34,7 @@ app.use(helmet());
 
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",")
-  : ["http://localhost:5173","https://vixora-app.vercel.app"];
+  : ["http://localhost:5173","https://vixora-app.vercel.app","https://app.vixora.co.in/"];
 
 app.use(
   cors({
