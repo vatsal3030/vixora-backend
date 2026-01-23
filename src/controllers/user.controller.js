@@ -980,11 +980,14 @@ export const deleteAccount = asyncHandler(async (req, res) => {
         }
     });
 
+    const isProd = process.env.NODE_ENV === "production";
+
     const cookieOptions = {
         httpOnly: true,
-        secure: true,
-        sameSite: "none",
+        secure: isProd,                 // true ONLY in prod
+        sameSite: isProd ? "none" : "lax",
     };
+
 
     res.clearCookie("accessToken", cookieOptions);
     res.clearCookie("refreshToken", cookieOptions);
@@ -1148,11 +1151,14 @@ export const restoreAccountConfirm = asyncHandler(async (req, res) => {
         select: userSafeSelect
     });
 
+    const isProd = process.env.NODE_ENV === "production";
+
     const cookieOptions = {
         httpOnly: true,
-        secure: true,
-        sameSite: "none",
+        secure: isProd,                 // true ONLY in prod
+        sameSite: isProd ? "none" : "lax",
     };
+
 
     return res
         .status(200)
