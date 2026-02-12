@@ -41,6 +41,7 @@
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pg": "^8.11.3",
+    "sib-api-v3-sdk": "^8.5.0",
     "zod": "^4.2.1"
   },
   "devDependencies": {
