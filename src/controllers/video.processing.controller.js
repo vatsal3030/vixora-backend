@@ -52,13 +52,15 @@ export const cancelVideoProcessing = asyncHandler(async (req, res) => {
   }
 
   // 🧠 Remove job from queue
-  const jobId = `video-${videoId}`;
-  const job = await videoQueue.getJob(jobId);
+  if (videoQueue) {
+    const jobId = `video-${videoId}`;
+    const job = await videoQueue.getJob(jobId);
 
-  if (job) {
-    const state = await job.getState();
-    if (state !== "completed" && state !== "failed") {
-      await job.remove();
+    if (job) {
+      const state = await job.getState();
+      if (state !== "completed" && state !== "failed") {
+        await job.remove();
+      }
     }
   }
 

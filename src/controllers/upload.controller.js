@@ -5,6 +5,73 @@ import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import crypto from "crypto";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
+import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
+
+const processVideoWithoutQueue = async (videoId) => {
+    try {
+        await prisma.video.update({
+            where: { id: videoId },
+            data: {
+                processingStatus: "PROCESSING",
+                processingStartedAt: new Date(),
+                processingProgress: 20,
+                processingStep: "FALLBACK_PROCESSING",
+            },
+        });
+
+        await prisma.videoAnalyticsSnapshot.create({
+            data: {
+                videoId,
+                views: 0,
+                likes: 0,
+                comments: 0,
+                shares: 0,
+                watchTimeSeconds: 0,
+                snapshotDate: new Date(),
+            },
+        }).catch(() => null);
+
+        const video = await prisma.video.findUnique({
+            where: { id: videoId },
+            select: { thumbnail: true, videoFile: true },
+        });
+
+        if (!video) {
+            throw new Error("Video not found during fallback processing");
+        }
+
+        if (!video.thumbnail && video.videoFile) {
+            const autoThumbnail = generateVideoThumbnail(video.videoFile);
+            if (autoThumbnail) {
+                await prisma.video.update({
+                    where: { id: videoId },
+                    data: { thumbnail: autoThumbnail },
+                });
+            }
+        }
+
+        await prisma.video.update({
+            where: { id: videoId },
+            data: {
+                processingStatus: "COMPLETED",
+                processingCompletedAt: new Date(),
+                processingProgress: 100,
+                processingStep: "DONE",
+                isPublished: true,
+                isHlsReady: true,
+            },
+        });
+    } catch (error) {
+        console.error("Fallback video processing failed:", error?.message || error);
+        await prisma.video.update({
+            where: { id: videoId },
+            data: {
+                processingStatus: "FAILED",
+                processingError: error?.message || "Fallback processing failed",
+            },
+        }).catch(() => null);
+    }
+};
 
 /*
 CREATE UPLOAD SESSION
@@ -350,11 +417,20 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
 
     /* ---------- START BACKGROUND PROCESS ---------- */
 
-    await enqueueVideoProcessing({
-        videoId: video.id,
-        userId: req.user.id,
-        videoUrl: safeVideoUrl
-    });
+    let queued = null;
+    try {
+        queued = await enqueueVideoProcessing({
+            videoId: video.id,
+            userId: req.user.id,
+            videoUrl: safeVideoUrl
+        });
+    } catch (error) {
+        console.error("Queue enqueue failed. Falling back to direct processing:", error?.message || error);
+    }
+
+    if (!queued) {
+        processVideoWithoutQueue(video.id);
+    }
 
     return res.status(200).json(
         new ApiResponse(

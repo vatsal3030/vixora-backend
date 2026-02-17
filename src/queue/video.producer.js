@@ -5,6 +5,10 @@ export const enqueueVideoProcessing = async ({
   userId,
   videoUrl,
 }) => {
+  if (!videoQueue) {
+    return null;
+  }
+
   return videoQueue.add(
     "process-video",
     {
