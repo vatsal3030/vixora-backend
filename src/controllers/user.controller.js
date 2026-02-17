@@ -10,7 +10,11 @@ import { generateRefreshToken } from "../utils/jwt.js";
 import jwt from 'jsonwebtoken'
 import userSafeSelect from '../utils/userSafeSelect.js'
 import { sendEmail } from "../utils/email.js";
-import { restoreOtpTemplate, emailVerificationOtpTemplate, welcomeEmailTemplate, forgotPasswordOtpTemplate } from "../utils/emailTemplates.js";
+import { restoreOtpTemplate, emailVerificationOtpTemplate, welcomeEmailTemplate, forgotPasswordOtpTemplate, emailChangeOtpTemplate, emailChangedNotificationTemplate } from "../utils/emailTemplates.js";
+import { getSecurityContext } from "../utils/securityContext.js";
+import { getCookieOptions } from "../utils/cookieOptions.js";
+import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
+
 
 export const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -41,17 +45,6 @@ export const generateAccessAndRefreshToken = async (userId) => {
 }
 
 export const registerUser = asyncHandler(async (req, res) => {
-    // Validate request body
-    // get user details from frontend
-    // validation
-    // check if user exists
-    // check for images
-    // upload avatar to cloudinary
-    // encrypt password
-    // create user in DB
-    // remove password & refresh token
-    // return response
-
 
     const parsed = createUserSchema.safeParse(req.body);
 
@@ -61,20 +54,17 @@ export const registerUser = asyncHandler(async (req, res) => {
 
     const { fullName, email, username, password } = parsed.data;
 
-    if ([fullName, email, username, password].some((field) =>
-        field?.trim().length === 0)) {
-        throw new ApiError(400, "All fields are required")
+    if ([fullName, email, username, password].some(f => !f?.trim())) {
+        throw new ApiError(400, "All fields required");
     }
 
-    // 3. check if user already exists
+
     const existingUser = await prisma.user.findFirst({
-        where: {
-            OR: [{ email }, { username }],
-        },
+        where: { OR: [{ email }, { username }] }
     });
 
     if (existingUser && existingUser.emailVerified) {
-        throw new ApiError(409, "User with given email or username already exists");
+        throw new ApiError(409, "User already exists");
     }
 
     // 🟡 Exists but not verified → resend OTP
@@ -115,25 +105,6 @@ export const registerUser = asyncHandler(async (req, res) => {
         );
     }
 
-    const avatarLocalPath = req.files?.avatar[0]?.path
-    // const coverImageLocalPath = req.files?.coverImage[0]?.path
-
-    let coverImageLocalPath;
-    if (req.files && Array.isArray(req.files.coverImage) && req.files.coverImage.length > 0) {
-        coverImageLocalPath = req.files.coverImage[0].path
-    }
-
-    if (!avatarLocalPath) {
-        throw new ApiError(400, "Avatar image is required(Local Path missing)")
-    }
-
-    const avatar = await uploadOnCloudinary(avatarLocalPath)
-    const coverImage = await uploadOnCloudinary(coverImageLocalPath)
-
-    if (!avatar) {
-        throw new ApiError(400, `Avatar image is required / cloudinary problem ${avatar} `)
-    }
-
     const hashedPassword = await hashPassword(password)
 
     const createdUser = await prisma.user.create({
@@ -141,22 +112,11 @@ export const registerUser = asyncHandler(async (req, res) => {
             fullName,
             email,
             username: username.toLowerCase(),
-            avatar: avatar.url,
-            avatarPublicId: avatar.public_id,
-            coverImage: coverImage?.url || "",
-            coverImagePublicId: coverImage?.public_id || "",
             password: hashedPassword,
-        },
-        select: {
-            id: true,
-            fullName: true,
-            email: true,
-            username: true,
-            avatar: true,
-            coverImage: true,
-            createdAt: true,
+            emailVerified: false
         }
     });
+
 
     if (!createdUser) {
         throw new ApiError(500, "Something went wrong while registering the user");
@@ -194,7 +154,6 @@ export const registerUser = asyncHandler(async (req, res) => {
     } catch (err) {
         console.warn("Verification email failed:", err.message);
     }
-
 
     return res.status(201).json(
         new ApiResponse(201, {}, "User registered Successfully. Please verify your email.")
@@ -375,14 +334,24 @@ export const loginUser = asyncHandler(async (req, res) => {
         throw new ApiError(400, "username or email is required")
     }
 
+    const normalizedEmail = email?.toLowerCase().trim();
+    const normalizedUsername = username?.trim();
+
     const user = await prisma.user.findFirst({
         where: {
-            OR: [{ email }, { username }]
+            OR: [
+                { email: normalizedEmail },
+                { username: normalizedUsername }
+            ]
         }
-    })
+    });
 
     if (!user) {
         throw new ApiError(404, "User not found")
+    }
+
+    if (user.isDeleted) {
+        throw new ApiError(403, "Account deleted");
     }
 
     // 🔥 THIS IS THE MAIN FIX
@@ -396,7 +365,6 @@ export const loginUser = asyncHandler(async (req, res) => {
             "This account uses Google sign-in. Please continue with Google."
         );
     }
-
 
     const isPasswordValid = await comparePassword(password, user.password)
 
@@ -421,12 +389,7 @@ export const loginUser = asyncHandler(async (req, res) => {
         },
     });
 
-
-    const options = {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",   // REQUIRED
-    }
+    const options = getCookieOptions();
 
     return res.
         status(200).
@@ -443,7 +406,6 @@ export const loginUser = asyncHandler(async (req, res) => {
                     "User Logged In Successfully"
                 )
         )
-
 })
 
 export const logOutUser = asyncHandler(async (req, res) => {
@@ -456,11 +418,7 @@ export const logOutUser = asyncHandler(async (req, res) => {
         }
     })
 
-    const options = {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",   // REQUIRED
-    }
+    const options = getCookieOptions();
 
     return res.
         status(200).
@@ -475,44 +433,74 @@ export const logOutUser = asyncHandler(async (req, res) => {
 })
 
 export const refreshAccessToken = asyncHandler(async (req, res) => {
-    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken
-    if (!incomingRefreshToken) throw new ApiError(401, "Unothorized request")
+    const incomingRefreshToken =
+        req.cookies?.refreshToken || req.body?.refreshToken;
 
-    try {
-        const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET)
+    const cookieOptions = getCookieOptions();
 
-        const user = await prisma.user.findUnique({
-            where: { id: decodedToken?.id }
-        })
-
-        if (!user) throw new ApiError(401, "Invalid refresh token")
-
-        if (incomingRefreshToken !== user.refreshToken) throw new ApiError(401, "Refresh token is expired or used")
-
-        const options = {
-            httpOnly: true,
-            secure: true,
-            sameSite: "none",   // REQUIRED
-        }
-
-        const { accessToken, newRefreshToken } = await generateAccessAndRefreshToken(user.id)
-
-        return res.
-            status(200).
-            cookie("accessToken", accessToken, options).
-            cookie("refreshToken", newRefreshToken, options).
-            json(
-                new ApiResponse(200,
-                    {
-                        // accessToken, refreshToken: newRefreshToken 
-                    },
-                    "Access token refreshed successfully"
-                )
-            )
-    } catch (error) {
-        throw new ApiError(401, error?.message || "Invalid refresh token")
+    if (!incomingRefreshToken) {
+        return res.status(401).json({
+            success: false,
+            message: "Unauthorized request",
+        });
     }
 
+    try {
+        const decodedToken = jwt.verify(
+            incomingRefreshToken,
+            process.env.REFRESH_TOKEN_SECRET
+        );
+
+        if (!decodedToken?.id || typeof decodedToken.id !== "string") {
+            return res
+                .status(401)
+                .clearCookie("accessToken", cookieOptions)
+                .clearCookie("refreshToken", cookieOptions)
+                .json({
+                    success: false,
+                    message: "Invalid refresh token",
+                });
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: decodedToken.id },
+        });
+
+        if (!user || !user.refreshToken || incomingRefreshToken !== user.refreshToken) {
+            return res
+                .status(401)
+                .clearCookie("accessToken", cookieOptions)
+                .clearCookie("refreshToken", cookieOptions)
+                .json({
+                    success: false,
+                    message: "Invalid refresh token",
+                });
+        }
+
+        const { accessToken, refreshToken } =
+            await generateAccessAndRefreshToken(user.id);
+
+        return res
+            .status(200)
+            .cookie("accessToken", accessToken, cookieOptions)
+            .cookie("refreshToken", refreshToken, cookieOptions)
+            .json(
+                new ApiResponse(
+                    200,
+                    {},
+                    "Access token refreshed successfully"
+                )
+            );
+    } catch (error) {
+        return res
+            .status(401)
+            .clearCookie("accessToken", cookieOptions)
+            .clearCookie("refreshToken", cookieOptions)
+            .json({
+                success: false,
+                message: "Invalid refresh token",
+            });
+    }
 })
 
 export const changeCurrentPassword = asyncHandler(async (req, res) => {
@@ -577,10 +565,10 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
         where: { email: normalizedEmail },
     });
 
-    // 🔐 Do NOT reveal user existence
+    // ✅ DO NOT reveal existence
     if (!user || user.isDeleted) {
-        return res.status(404).json(
-            new ApiResponse(404, {}, "User not found")
+        return res.json(
+            new ApiResponse(200, {}, "If account exists, OTP will be sent")
         );
     }
 
@@ -619,7 +607,7 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
 
 
     return res.status(200).json(
-        new ApiResponse(200, {}, "If account exists, OTP will be sent ")
+        new ApiResponse(200, {}, "If an account with that email exists, an OTP has been sent.")
     );
 })
 
@@ -708,12 +696,208 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 
 })
 
-export const updateAccountDetails = asyncHandler(async (req, res) => {
-    const { fullName, email } = req.body;
+export const changeEmailRequest = asyncHandler(async (req, res) => {
+    let { email } = req.body;
+    const userId = req.user.id;
 
-    if (!fullName || !email) {
-        throw new ApiError(400, "Full name and email are required");
+    email = email?.toLowerCase().trim();
+
+    if (!email) {
+        throw new ApiError(400, "New email is required");
     }
+
+    // ❌ Prevent same email
+    const currentUser = await prisma.user.findUnique({
+        where: { id: userId }
+    });
+
+    if (!currentUser) {
+        throw new ApiError(404, "User not found");
+    }
+
+    if (currentUser.isDeleted) {
+        throw new ApiError(403, "Account is deleted");
+    }
+
+
+    if (currentUser.email === email) {
+        throw new ApiError(400, "New email must be different from current email");
+    }
+
+    // ❌ Prevent duplicate email
+    const existingUser = await prisma.user.findUnique({
+        where: { email }
+    });
+
+    if (existingUser && existingUser.emailVerified) {
+        throw new ApiError(409, "Email is already in use");
+    }
+
+    // ⏱ Cooldown
+    if (currentUser.otpLastSentAt &&
+        Date.now() - currentUser.otpLastSentAt.getTime() < 2 * 60 * 1000
+    ) {
+        throw new ApiError(429, "Please wait before requesting again");
+    }
+
+    // 🔐 Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await hashPassword(otp);
+
+    // 💾 Save pending email + OTP
+    await prisma.user.update({
+        where: { id: userId },
+        data: {
+            pendingEmail: email,
+            pendingEmailOtpHash: otpHash,
+            pendingEmailOtpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            otpAttempts: 0,
+            otpLastSentAt: new Date()
+        }
+    });
+
+    // 📧 Send OTP to NEW email
+    const mail = emailChangeOtpTemplate({
+        fullName: currentUser.fullName,
+        otp
+    });
+
+
+    await sendEmail({
+        to: email,
+        subject: mail.subject,
+        html: mail.html,
+        text: `Your OTP is ${otp}`
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "OTP sent to new email")
+    );
+});
+
+export const confirmEmailChange = asyncHandler(async (req, res) => {
+    const { otp } = req.body;
+    const userId = req.user.id;
+
+    if (!otp?.trim()) {
+        throw new ApiError(400, "OTP is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: userId }
+    });
+
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    if (user.isDeleted) {
+        throw new ApiError(403, "Account is deleted");
+    }
+
+
+    if (!user.pendingEmail || !user.pendingEmailOtpHash) {
+        throw new ApiError(400, "No email change request found");
+    }
+
+    if (!user.pendingEmailOtpExpiresAt || user.pendingEmailOtpExpiresAt < new Date()) {
+        throw new ApiError(400, "OTP expired");
+    }
+
+
+    if (user.otpAttempts >= 5) {
+        throw new ApiError(429, "Too many incorrect attempts");
+    }
+
+    const oldEmail = user.email;
+
+    const isValid = await comparePassword(otp, user.pendingEmailOtpHash);
+
+    if (!isValid) {
+        await prisma.user.update({
+            where: { id: userId },
+            data: { otpAttempts: { increment: 1 } }
+        });
+
+        throw new ApiError(400, "Invalid OTP");
+    }
+
+    const emailTaken = await prisma.user.findUnique({
+        where: { email: user.pendingEmail }
+    });
+
+    if (emailTaken && emailTaken.id !== userId) {
+        throw new ApiError(409, "Email is already in use");
+    }
+
+
+    // ✅ Update email
+    const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: {
+            email: user.pendingEmail,
+            emailVerified: true,
+
+            pendingEmail: null,
+            pendingEmailOtpHash: null,
+            pendingEmailOtpExpiresAt: null,
+
+            otpAttempts: 0,
+            otpLastSentAt: null,
+
+            refreshToken: null
+        },
+        select: userSafeSelect
+    });
+
+    const securityContext = getSecurityContext(req);
+
+    // Send notification to OLD email
+    const mail = emailChangedNotificationTemplate({
+        fullName: user.fullName,
+        oldEmail,
+        newEmail: user.pendingEmail,
+        securityContext
+    });
+
+    await sendEmail({
+        to: oldEmail,
+        subject: mail.subject,
+        html: mail.html
+    });
+
+
+    return res.status(200).json(
+        new ApiResponse(200, updatedUser, "Email updated successfully")
+    );
+});
+
+export const cancelEmailChange = asyncHandler(async (req, res) => {
+    const userId = req.user.id;
+
+    await prisma.user.update({
+        where: { id: userId },
+        data: {
+            pendingEmail: null,
+            pendingEmailOtpHash: null,
+            pendingEmailOtpExpiresAt: null,
+            otpAttempts: 0,
+        }
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "Email change request cancelled")
+    );
+});
+
+export const updateAccountDetails = asyncHandler(async (req, res) => {
+    let { fullName } = req.body;
+
+    if (!fullName) {
+        throw new ApiError(400, "Full name is required");
+    }
+
+    fullName = fullName.trim();
 
     try {
         const updatedUser = await prisma.user.update({
@@ -722,7 +906,6 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
             },
             data: {
                 fullName,
-                email,
             },
             select: {
                 id: true,
@@ -735,102 +918,102 @@ export const updateAccountDetails = asyncHandler(async (req, res) => {
             },
         });
 
-        return res.
-            status(200).
-            json(
-                new ApiResponse(
-                    200,
-                    updatedUser,
-                    "Account details updated successfully"
-                )
-            );
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                updatedUser,
+                "Account details updated successfully"
+            )
+        );
     } catch (error) {
-        // Unique email constraint error
         if (error.code === "P2002") {
-            throw new ApiError(409, "Email is already in use");
+            throw new ApiError(409, "Error to update account details. Duplicate value.");
         }
-        throw new ApiError(409, error, "failed to update account details");
+        throw new ApiError(500, "Failed to update account details");
     }
 })
 
 export const updateUserAvatar = asyncHandler(async (req, res) => {
-    const avatarLocalPath = req.file?.path;
 
-    if (!avatarLocalPath) {
-        throw new ApiError(400, "Avatar file is missing");
+    if (!req.user.emailVerified) {
+        throw new ApiError(403, "Verify email first");
     }
 
-    const avatar = await uploadOnCloudinary(avatarLocalPath);
+    const { avatarPublicId } = req.body;
 
-    if (!avatar || !avatar.url) {
-        throw new ApiError(
-            400,
-            "Error while uploading avatar file to Cloudinary"
-        );
+    if (!avatarPublicId) {
+        throw new ApiError(400, "Avatar public ID missing");
     }
 
+    const resource = await verifyCloudinaryAssetOwnership(
+        avatarPublicId,
+        `avatars/${req.user.id}`
+    );
 
-    if (req.user.avatarPublicId) {
-        await deleteImageOnCloudinary(req.user.avatarPublicId);
+
+    const existingUser = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { avatarPublicId: true }
+    });
+
+    if (existingUser?.avatarPublicId) {
+        await deleteImageOnCloudinary(existingUser.avatarPublicId);
     }
 
     const updatedUser = await prisma.user.update({
-        where: {
-            id: req.user.id,
-        },
+        where: { id: req.user.id },
         data: {
-            avatar: avatar.url,
-            avatarPublicId: avatar.public_id,
+            avatar: resource.secure_url,
+            avatarPublicId: resource.public_id
         },
-        select: userSafeSelect, // safe fields only
+        select: userSafeSelect
     });
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            updatedUser,
-            "Avatar updated successfully"
-        )
+        new ApiResponse(200, updatedUser, "Avatar updated")
     );
 });
 
 export const updateUserCoverImage = asyncHandler(async (req, res) => {
-    const coverImageLocalPath = req.file?.path;
 
-    if (!coverImageLocalPath) {
-        throw new ApiError(400, "coverImage file is missing");
+    if (!req.user.emailVerified) {
+        throw new ApiError(403, "Verify email first");
     }
 
-    const coverImage = await uploadOnCloudinary(coverImageLocalPath);
+    const { coverImagePublicId } = req.body;
 
-    if (!coverImage || !coverImage.url) {
-        throw new ApiError(
-            400,
-            "Error while uploading cover Image file to Cloudinary"
-        );
+
+
+    if (!coverImagePublicId) {
+        throw new ApiError(400, "Cover image public ID missing");
     }
 
-    if (req.user.coverImagePublicId) {
-        await deleteImageOnCloudinary(req.user.coverImagePublicId);
+    const resource = await verifyCloudinaryAssetOwnership(
+        coverImagePublicId,
+        `covers/${req.user.id}`
+    );
+
+
+    const existingUser = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { coverImagePublicId: true }
+    });
+
+    if (existingUser?.coverImagePublicId) {
+        await deleteImageOnCloudinary(existingUser.coverImagePublicId);
     }
 
     const updatedUser = await prisma.user.update({
-        where: {
-            id: req.user.id,
-        },
+        where: { id: req.user.id },
         data: {
-            coverImage: coverImage.url,
-            coverImagePublicId: coverImage.public_id,
+            coverImage: resource.secure_url,
+            coverImagePublicId: resource.public_id
         },
-        select: userSafeSelect, // safe fields only
+        select: userSafeSelect
     });
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            updatedUser,
-            "coverImage updated successfully"
-        )
+        new ApiResponse(200, updatedUser, "Cover updated")
     );
 });
 
@@ -844,18 +1027,21 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
             username: true,
             avatar: true,
             coverImage: true,
-            email: true,
+            isDeleted: true,
         },
     });
 
     if (!channel) {
         throw new ApiError(404, "channel does not exist");
     }
+    if (channel.isDeleted) {
+        throw new ApiError(404, "channel has been deleted");
+    }
 
     const [
         subscribersCount,
         channelsSubscribedToCount,
-        isSubscribed,
+        isSubscribedCount,
     ] = await Promise.all([
         prisma.subscription.count({
             where: { channelId: channel.id },
@@ -866,15 +1052,13 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
         }),
 
         req.user?.id
-            ? prisma.subscription.findUnique({
+            ? prisma.subscription.count({
                 where: {
-                    subscriberId_channelId: {
-                        subscriberId: req.user.id,
-                        channelId: channel.id,
-                    },
-                },
+                    subscriberId: req.user.id,
+                    channelId: channel.id
+                }
             })
-            : null,
+            : 0
     ]);
 
     return res.status(200).json(
@@ -884,7 +1068,7 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
                 ...channel,
                 subscribersCount,
                 channelsSubscribedToCount,
-                isSubscribed: Boolean(isSubscribed),
+                isSubscribed: isSubscribedCount > 0,
             },
             "User channel fetched successfully"
         )
@@ -892,6 +1076,7 @@ export const getUserChannelProfile = asyncHandler(async (req, res) => {
 })
 
 export const getUserById = asyncHandler(async (req, res) => {
+
     const { userId } = req.params;
 
     if (!userId) {
@@ -906,63 +1091,70 @@ export const getUserById = asyncHandler(async (req, res) => {
             username: true,
             avatar: true,
             coverImage: true,
-            email: true,
-            description: true,
+            channelDescription: true,
             createdAt: true,
+            isDeleted: true,
             _count: {
                 select: {
                     subscribers: true,
                     subscriptions: true
                 }
             }
-        },
+        }
     });
 
-    if (!user) {
+    if (!user || user.isDeleted) {
         throw new ApiError(404, "User not found");
     }
 
-    // Check if current user is subscribed to this channel
-    const isSubscribed = req.user?.id ? await prisma.subscription.findUnique({
-        where: {
-            subscriberId_channelId: {
+    const isSubscribedCount = req.user?.id
+        ? await prisma.subscription.count({
+            where: {
                 subscriberId: req.user.id,
-                channelId: userId,
-            },
-        },
-    }) : null;
+                channelId: userId
+            }
+        })
+        : 0;
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                ...user,
-                subscribersCount: user._count.subscribers,
-                subscriptionsCount: user._count.subscriptions,
-                isSubscribed: Boolean(isSubscribed),
-                _count: undefined
-            },
-            "User fetched successfully"
-        )
+        new ApiResponse(200, {
+            id: user.id,
+            fullName: user.fullName,
+            username: user.username,
+            avatar: user.avatar,
+            coverImage: user.coverImage,
+            channelDescription: user.channelDescription,
+            createdAt: user.createdAt,
+            subscribersCount: user._count.subscribers,
+            subscriptionsCount: user._count.subscriptions,
+            isSubscribed: isSubscribedCount > 0
+        }, "User fetched successfully")
     );
+
 });
 
 export const updateChannelDescription = asyncHandler(async (req, res) => {
+
     const userId = req.user.id;
-    const { channelDescription, channelLinks, channelCategory } = req.body;
+    const { channelDescription, channelLinks } = req.body;
+
+    if (channelDescription && channelDescription.length > 1000) {
+        throw new ApiError(400, "Description too long");
+    }
 
     const updated = await prisma.user.update({
         where: { id: userId },
         data: {
             channelDescription,
-            channelLinks,
-            channelCategory
-        }
+            channelLinks
+        },
+        select: userSafeSelect
     });
 
     res.status(200).json(
         new ApiResponse(200, updated, "Channel updated successfully")
     );
+
 });
 
 export const deleteAccount = asyncHandler(async (req, res) => {
@@ -980,14 +1172,7 @@ export const deleteAccount = asyncHandler(async (req, res) => {
         }
     });
 
-    const isProd = process.env.NODE_ENV === "production";
-
-    const cookieOptions = {
-        httpOnly: true,
-        secure: isProd,                 // true ONLY in prod
-        sameSite: isProd ? "none" : "lax",
-    };
-
+    const cookieOptions = getCookieOptions();
 
     res.clearCookie("accessToken", cookieOptions);
     res.clearCookie("refreshToken", cookieOptions);
@@ -1043,7 +1228,7 @@ export const restoreAccountRequest = asyncHandler(async (req, res) => {
     const otpHash = await hashPassword(otp);
 
     await prisma.user.update({
-        where: { email: email.toLowerCase().trim() },
+        where: { id: user.id },
         data: {
             otpHash,
             otpExpiresAt: new Date(Date.now() + 1000 * 60 * 5),
@@ -1151,14 +1336,7 @@ export const restoreAccountConfirm = asyncHandler(async (req, res) => {
         select: userSafeSelect
     });
 
-    const isProd = process.env.NODE_ENV === "production";
-
-    const cookieOptions = {
-        httpOnly: true,
-        secure: isProd,                 // true ONLY in prod
-        sameSite: isProd ? "none" : "lax",
-    };
-
+    const cookieOptions = getCookieOptions();
 
     return res
         .status(200)

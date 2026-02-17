@@ -10,6 +10,7 @@ const router = Router();
 
 router.use(verifyJwt);
 
+
 // GET current user settings
 router.get("/", getUserSettings);
 

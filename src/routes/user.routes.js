@@ -18,25 +18,16 @@ import {
     forgotPasswordVerify,
     verifyEmail,
     resetPassword,
-    resendOtp
+    resendOtp,
+    changeEmailRequest,
+    confirmEmailChange,
+    cancelEmailChange
 } from "../controllers/user.controller.js";
 import { upload } from "../middlewares/multer.middleware.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 const router = Router();
 
-router.route("/register").post(
-    upload.fields([
-        {
-            name: "avatar",
-            maxCount: 1
-        },
-        {
-            name: "coverImage",
-            maxCount: 1
-        }
-    ]),
-    registerUser
-)
+router.post("/register", registerUser);
 router.route("/verify-email").post(verifyEmail)
 router.route("/resend-otp").post(resendOtp)
 
@@ -53,16 +44,21 @@ router.route("/reset-password").post(resetPassword)
 router.route("/change-password").post(verifyJwt, changeCurrentPassword)
 
 router.route("/update-account").patch(verifyJwt, updateAccountDetails)
-router.route("/update-avatar").patch(verifyJwt, upload.single("avatar"), updateUserAvatar)
-router.route("/update-coverImage").patch(verifyJwt, upload.single("coverImage"), updateUserCoverImage)
+router.patch("/update-avatar", verifyJwt, updateUserAvatar);
+router.patch("/update-coverImage", verifyJwt, updateUserCoverImage);
 router.route("/update-description").patch(verifyJwt, updateChannelDescription)
 
 router.route("/u/:username").get(verifyJwt, getUserChannelProfile)
 router.route("/id/:userId").get(verifyJwt, getUserById)
 
 router.route("/delete-account").delete(verifyJwt, deleteAccount)
-router.route("/restore-account/request").patch( restoreAccountRequest)
-router.route("/restore-account/confirm").patch( restoreAccountConfirm)
+router.route("/restore-account/request").patch(restoreAccountRequest)
+router.route("/restore-account/confirm").patch(restoreAccountConfirm)
+
+router.route("/change-email/request").post(verifyJwt, changeEmailRequest)
+router.route("/change-email/confirm").post(verifyJwt, confirmEmailChange)
+router.route("/change-email/cancel").post(verifyJwt, cancelEmailChange) // optional
+
 
 export default router;
 

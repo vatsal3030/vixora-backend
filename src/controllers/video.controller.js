@@ -3,6 +3,8 @@ import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import uploadOnCloudinary, { deleteImageOnCloudinary, deleteVideoOnCloudinary } from "../utils/cloudinary.js"
+import { enqueueVideoProcessing } from "../queue/video.producer.js";
+
 
 export const updateVideoScore = async (videoId) => {
     const video = await prisma.video.findUnique({
@@ -13,6 +15,8 @@ export const updateVideoScore = async (videoId) => {
             watchHistory: true
         }
     });
+
+    if (!video) return;
 
     const score =
         video.views * 0.3 +
@@ -51,7 +55,10 @@ export const getAllVideos = asyncHandler(async (req, res) => {
     const skip = (page - 1) * limit;
 
     const whereClause = {
-        isPublished: true
+        isPublished: true,
+        processingStatus: "COMPLETED",
+        isHlsReady: true,
+        isDeleted: false,
     };
 
     if (isShort !== undefined) {
@@ -78,6 +85,14 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         };
     }
 
+    const allowedSortFields = ["createdAt", "views", "duration", "title"];
+
+    if (!allowedSortFields.includes(sortBy)) {
+        sortBy = "createdAt";
+    }
+
+    sortType = sortType === "asc" ? "asc" : "desc";
+
     // 🔥 APPLY SCORE ONLY WHEN SEARCH EXISTS
     let videos;
     let totalCount;
@@ -100,6 +115,10 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                     views: true,
                     duration: true,
                     createdAt: true,
+                    playbackUrl: true,
+                    availableQualities: true,
+                    processingStatus: true,
+                    processingProgress: true,
                     owner: {
                         select: {
                             id: true,
@@ -127,6 +146,8 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         // 🔥 SEARCH MODE (in-memory scoring) WITH PROGRESS
         const allVideos = await prisma.video.findMany({
             where: whereClause,
+            orderBy: { views: "desc" }, // DB pre ranking
+            take: limit * 5, // small buffer
             select: {
                 id: true,
                 title: true,
@@ -135,6 +156,10 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                 views: true,
                 duration: true,
                 createdAt: true,
+                playbackUrl: true,
+                availableQualities: true,
+                processingStatus: true,
+                processingProgress: true,
                 owner: {
                     select: {
                         id: true,
@@ -202,160 +227,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
     );
 });
 
-export const publishAVideo = asyncHandler(async (req, res) => {
-    const { title, description, tags = [] } = req.body;
-
-    if (!title || !description) {
-        throw new ApiError(400, "title & description both field are required");
-    }
-
-    const thumbnailLocalPath = req.files?.thumbnail?.[0]?.path;
-    const videoFileLocalPath = req.files?.videoFile?.[0]?.path;
-
-    if (!thumbnailLocalPath) {
-        throw new ApiError(400, "thumbnail image is required (Local Path missing)");
-    }
-
-    if (!videoFileLocalPath) {
-        throw new ApiError(400, "videoFile is required (Local Path missing)");
-    }
-
-    // 1️⃣ Upload video
-    const videoFile = await uploadOnCloudinary(videoFileLocalPath);
-    if (!videoFile) throw new ApiError(500, "videoFile upload failed");
-
-    // 2️⃣ Upload thumbnail
-    const thumbnail = await uploadOnCloudinary(thumbnailLocalPath);
-    if (!thumbnail) {
-        await deleteVideoOnCloudinary(videoFile.public_id);
-        throw new ApiError(500, "thumbnail upload failed");
-    }
-
-    // 3️⃣ Duration & short logic
-    const duration = Math.round(videoFile.duration);
-    const isShort =
-        req.body.isShort !== undefined
-            ? req.body.isShort === "true" || req.body.isShort === true
-            : duration <= 60;
-
-    const aspectRatio = videoFile.width && videoFile.height
-        ? `${videoFile.width}:${videoFile.height}`
-        : null;
-
-    let tagArray = [];
-
-    if (Array.isArray(tags)) {
-        tagArray = tags;
-    } else if (typeof tags === "string") {
-        try {
-            tagArray = JSON.parse(tags);
-        } catch {
-            tagArray = tags.split(","); // fallback
-        }
-    }
-
-    tagArray = tagArray.map(t => t.toLowerCase().trim());
-
-    const newVideo = await prisma.$transaction(async (tx) => {
-        // 1. Ensure tags exist
-        await tx.tag.createMany({
-            data: tagArray.map(name => ({ name })),
-            skipDuplicates: true
-        });
-
-        const tagRecords = await tx.tag.findMany({
-            where: {
-                name: { in: tagArray }
-            },
-            select: { id: true }
-        });
-
-        // 2. Create video
-        const video = await tx.video.create({
-            data: {
-                title,
-                description,
-                duration,
-                isShort,
-                aspectRatio,
-                videoFile: videoFile.secure_url,
-                videoPublicId: videoFile.public_id,
-                thumbnail: thumbnail.secure_url,
-                thumbnailPublicId: thumbnail.public_id,
-                ownerId: req.user.id,
-                isPublished: true,
-            },
-            select: {
-                id: true,
-                title: true,
-                description: true,
-                thumbnail: true,
-                duration: true,
-                views: true,
-                isPublished: true,
-                createdAt: true,
-                isShort: true,
-                aspectRatio: true,
-                owner: {
-                    select: {
-                        id: true,
-                        username: true,
-                        avatar: true
-                    }
-                }
-            }
-        });
-
-        // 3. Attach tags
-        await tx.videoTag.createMany({
-            data: tagRecords.map(tag => ({
-                videoId: video.id,
-                tagId: tag.id
-            }))
-        });
-
-        return video;
-    });
-
-
-    if (newVideo.isPublished) {
-        // 🔔 Notify subscribers who enabled notifications
-        const subscribers = await prisma.subscription.findMany({
-            where: {
-                channelId: req.user.id,
-            },
-            select: {
-                subscriberId: true
-            }
-        });
-
-        if (subscribers.length > 0) {
-            await prisma.notification.createMany({
-                data: subscribers.map(sub => ({
-                    userId: sub.subscriberId,
-                    senderId: req.user.id,
-                    videoId: newVideo.id,
-                    type: "UPLOAD",
-                    title: "New Video Uploaded",
-                    message: `${req.user.username} uploaded: ${newVideo.title}`,
-                    data: {}
-                })),
-                skipDuplicates: true
-            });
-        }
-    }
-
-    if (newVideo.isShort) {
-        return res.status(201).json(
-            new ApiResponse(201, newVideo, "Short published successfully")
-        );
-    }
-
-    return res.status(201).json(
-        new ApiResponse(201, newVideo, "Video published successfully")
-    );
-});
-
 export const getVideoById = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
     const userId = req.user?.id || null;
@@ -374,8 +245,14 @@ export const getVideoById = asyncHandler(async (req, res) => {
             thumbnail: true,
             duration: true,
             views: true,
-            isPublished: true,
             createdAt: true,
+            playbackUrl: true,
+            availableQualities: true,
+            processingProgress: true,
+            processingStatus: true,
+            isHlsReady: true,
+            isDeleted: true,
+            isPublished: true,
             owner: {
                 select: {
                     id: true,
@@ -409,9 +286,16 @@ export const getVideoById = asyncHandler(async (req, res) => {
         }
     });
 
-    if (!video) {
+    if (
+        !video ||
+        !video.isPublished ||
+        video.isDeleted ||
+        video.processingStatus !== "COMPLETED" ||
+        !video.isHlsReady
+    ) {
         throw new ApiError(404, "Video not found");
     }
+
 
     // 🔐 Access control
     if (!video.isPublished && video.owner.id !== userId) {
@@ -443,6 +327,7 @@ export const getVideoById = asyncHandler(async (req, res) => {
     // Format response with interaction data
     const formattedVideo = {
         ...video,
+        playbackUrl: video.playbackUrl || video.videoFile,
         likesCount: video._count.likes,
         commentsCount: video._count.comments,
         isLiked: userId ? video.likes.length > 0 : false,
@@ -456,8 +341,6 @@ export const getVideoById = asyncHandler(async (req, res) => {
         _count: undefined,
         likes: undefined
     };
-
-    await updateVideoScore(videoId)
 
 
     return res.status(200).json(
@@ -484,20 +367,25 @@ export const updateVideo = asyncHandler(async (req, res) => {
             id: true,
             ownerId: true,
             thumbnailPublicId: true,
-            isDeleted: true
+            processingStatus: true,
+            isHlsReady: true,
+            isDeleted: true,
+            isPublished: true,
         }
     });
 
-    if (!existingVideo) {
-        throw new ApiError(404, "Video not found");
-    }
+    if (!existingVideo) throw new ApiError(404, "Video not found");
 
     if (existingVideo.ownerId !== req.user.id) {
-        throw new ApiError(403, "You are not allowed to update this video");
+        throw new ApiError(403, "Not allowed");
     }
 
     if (existingVideo.isDeleted) {
-        throw new ApiError(400, "Video is deleted. Restore for edit ");
+        throw new ApiError(400, "Restore video before editing");
+    }
+
+    if (existingVideo.processingStatus !== "COMPLETED" || !existingVideo.isHlsReady) {
+        throw new ApiError(400, "Video still processing");
     }
 
     const updateData = {};
@@ -535,6 +423,10 @@ export const updateVideo = asyncHandler(async (req, res) => {
             createdAt: true,
             isShort: true,
             aspectRatio: true,
+            playbackUrl: true,
+            availableQualities: true,
+            processingStatus: true,
+            processingProgress: true,
             owner: {
                 select: {
                     id: true,
@@ -568,26 +460,32 @@ export const deleteVideo = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
+            processingStatus: true,
+            isHlsReady: true,
             isDeleted: true,
+            isPublished: true,
         },
     });
 
-    if (!video) {
-        throw new ApiError(404, "Video not found");
-    }
+    if (!video) throw new ApiError(404, "Video not found");
 
     if (video.ownerId !== req.user.id) {
-        throw new ApiError(403, "You are not allowed to delete this video");
+        throw new ApiError(403, "Not allowed");
     }
 
     if (video.isDeleted) {
-        throw new ApiError(400, "Video already deleted");
+        throw new ApiError(400, "Already deleted");
+    }
+
+    if (video.processingStatus !== "COMPLETED" || !video.isHlsReady) {
+        throw new ApiError(400, "Video still processing");
     }
 
     await prisma.video.update({
         where: { id: videoId },
         data: {
             isDeleted: true,
+            isPublished: false,
             deletedAt: new Date(),
         },
     });
@@ -618,6 +516,8 @@ export const getAllDeletedVideos = asyncHandler(async (req, res) => {
         deletedAt: {
             gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
         },
+        processingStatus: "COMPLETED",
+        isHlsReady: true,
     };
 
     if (isShort !== undefined) {
@@ -647,6 +547,10 @@ export const getAllDeletedVideos = asyncHandler(async (req, res) => {
             isShort: true,
             aspectRatio: true,
             deletedAt: true,
+            playbackUrl: true,
+            availableQualities: true,
+            processingStatus: true,
+            processingProgress: true,
             owner: {
                 select: {
                     id: true,
@@ -677,11 +581,9 @@ export const getAllDeletedVideos = asyncHandler(async (req, res) => {
 export const restoreVideo = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
-    if (!videoId) {
-        throw new ApiError(400, "Video ID is required");
-    }
+    if (!videoId) throw new ApiError(400, "Video ID required");
 
-    const existingVideo = await prisma.video.findUnique({
+    const video = await prisma.video.findUnique({
         where: { id: videoId },
         select: {
             id: true,
@@ -691,103 +593,81 @@ export const restoreVideo = asyncHandler(async (req, res) => {
         }
     });
 
-    if (!existingVideo) {
-        throw new ApiError(404, "Video not found");
+    if (!video) throw new ApiError(404, "Video not found");
+
+    if (video.ownerId !== req.user.id) {
+        throw new ApiError(403, "Not allowed");
     }
 
-    if (existingVideo.ownerId !== req.user.id) {
-        throw new ApiError(403, "You are not allowed to restore this video");
-    }
-
-    if (!existingVideo.isDeleted || !existingVideo.deletedAt) {
+    if (!video.isDeleted) {
         throw new ApiError(400, "Video is not deleted");
     }
 
-    const restoreDeadline =
-        existingVideo.deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000;
+    if (video.deletedAt) {
+        const restoreDeadline =
+            video.deletedAt.getTime() + 7 * 24 * 60 * 60 * 1000;
 
-    if (Date.now() > restoreDeadline) {
-        throw new ApiError(403, "Restore window expired");
+        if (Date.now() > restoreDeadline) {
+            throw new ApiError(403, "Restore window expired");
+        }
     }
 
-
-    const updatedVideo = await prisma.video.update({
+    const updated = await prisma.video.update({
         where: { id: videoId },
         data: {
             isDeleted: false,
             deletedAt: null
-        },
-        select: {
-            id: true,
-            title: true,
-            thumbnail: true,
-            duration: true,
-            views: true,
-            createdAt: true,
-            isShort: true,
-            aspectRatio: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    avatar: true
-                }
-            }
         }
     });
 
-    return res.status(200).json(
-        new ApiResponse(200, updatedVideo, "Video restored successfully")
-    );
+    return res.json(new ApiResponse(200, updated, "Video restored"));
 });
+
 
 export const togglePublishStatus = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
-    if (!videoId) {
-        throw new ApiError(400, "Video ID is required");
-    }
-
-    const existingVideo = await prisma.video.findUnique({
+    const video = await prisma.video.findUnique({
         where: { id: videoId },
         select: {
             id: true,
             ownerId: true,
-            isPublished: true
+            isDeleted: true,
+            isPublished: true,
+            processingStatus: true,
+            isHlsReady: true
         }
     });
 
-    if (!existingVideo) {
-        throw new ApiError(404, "Video not found");
+    if (!video) throw new ApiError(404, "Video not found");
+
+    if (video.ownerId !== req.user.id) {
+        throw new ApiError(403, "Not allowed");
     }
 
-    if (existingVideo.ownerId !== req.user.id) {
-        throw new ApiError(403, "You are not allowed to update this video");
+    if (video.isDeleted) {
+        throw new ApiError(400, "Restore video first");
     }
 
-    if (existingVideo.isDeleted) {
-        throw new ApiError(400, "Video is deleted. Restore for edit ");
+    if (video.processingStatus !== "COMPLETED" || !video.isHlsReady) {
+        throw new ApiError(400, "Video not ready yet");
     }
 
-    const updatedVideo = await prisma.video.update({
+    const updated = await prisma.video.update({
         where: { id: videoId },
-        data: {
-            isPublished: !existingVideo.isPublished
-        },
-        select: {
-            id: true,
-            isPublished: true
-        }
+        data: { isPublished: !video.isPublished },
+        select: { id: true, isPublished: true }
     });
 
-    return res.status(200).json(
+    return res.json(
         new ApiResponse(
             200,
-            updatedVideo,
-            `Video ${updatedVideo.isPublished ? "published" : "unpublished"} successfully`
+            updated,
+            updated.isPublished ? "Video published" : "Video unpublished"
         )
     );
 });
+
 
 export const getUserVideos = asyncHandler(async (req, res) => {
     const { userId } = req.params;
@@ -808,7 +688,9 @@ export const getUserVideos = asyncHandler(async (req, res) => {
     const whereClause = {
         ownerId: userId,
         isPublished: true,
-        isDeleted: false
+        isDeleted: false,
+        isHlsReady: true,
+        processingStatus: "COMPLETED",
     };
 
     if (query && query.trim().length > 0) {
@@ -820,6 +702,12 @@ export const getUserVideos = asyncHandler(async (req, res) => {
 
     if (isShort !== undefined) {
         whereClause.isShort = isShort === "true";
+    }
+
+    const allowedSortFields = ["createdAt", "views", "duration", "title"];
+
+    if (!allowedSortFields.includes(sortBy)) {
+        sortBy = "createdAt";
     }
 
     const videos = await prisma.video.findMany({
@@ -839,6 +727,10 @@ export const getUserVideos = asyncHandler(async (req, res) => {
             views: true,
             isShort: true,
             createdAt: true,
+            playbackUrl: true,
+            availableQualities: true,
+            processingStatus: true,
+            processingProgress: true,
             owner: {
                 select: {
                     id: true,
@@ -895,7 +787,9 @@ export const getMyVideos = asyncHandler(async (req, res) => {
     const whereClause = {
         ownerId: userId,
         isPublished: true,
-        isDeleted: false
+        isDeleted: false,
+        isHlsReady: true,
+        processingStatus: "COMPLETED",
     };
 
 
@@ -951,6 +845,10 @@ export const getMyVideos = asyncHandler(async (req, res) => {
             views: true,
             duration: true,
             createdAt: true,
+            playbackUrl: true,
+            availableQualities: true,
+            processingStatus: true,
+            processingProgress: true,
             owner: {
                 select: {
                     id: true,

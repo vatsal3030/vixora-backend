@@ -7,42 +7,52 @@ datasource db {
 }
 
 model User {
-  id                 String            @id @default(uuid())
-  username           String?           @unique
-  email              String?           @unique
-  fullName           String
-  avatar             String?
-  coverImage         String?
-  password           String?
-  refreshToken       String?
-  authProvider       AuthProvider      @default(LOCAL)
-  providerId         String?
-  emailVerified      Boolean           @default(false)
-  otpHash            String?
-  otpExpiresAt       DateTime?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  avatarPublicId     String?
-  coverImagePublicId String?
-  channelDescription String?
-  channelLinks       Json?
-  deletedAt          DateTime?
-  isDeleted          Boolean           @default(false)
-  otpAttempts        Int               @default(0)
-  otpLastSentAt      DateTime?
-  channelCategories  ChannelCategory[]
-  comments           Comment[]
-  feedScores         FeedScore[]
-  likes              Like[]
-  sentNotifications  Notification[]    @relation("NotificationSender")
-  notifications      Notification[]    @relation("UserNotifications")
-  playlists          Playlist[]
-  subscribers        Subscription[]    @relation("UserSubscribers")
-  subscriptions      Subscription[]    @relation("UserSubscriptions")
-  tweets             Tweet[]
-  settings           UserSettings?
-  videos             Video[]           @relation("VideoOwner")
-  watchHistory       WatchHistory[]    @relation("UserWatchHistory")
+  id                       String                 @id @default(uuid())
+  username                 String?                @unique
+  email                    String?                @unique
+  fullName                 String
+  avatar                   String?
+  coverImage               String?
+  password                 String?
+  refreshToken             String?
+  authProvider             AuthProvider           @default(LOCAL)
+  providerId               String?
+  emailVerified            Boolean                @default(false)
+  otpHash                  String?
+  otpExpiresAt             DateTime?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  avatarPublicId           String?
+  coverImagePublicId       String?
+  channelDescription       String?
+  channelLinks             Json?
+  deletedAt                DateTime?
+  isDeleted                Boolean                @default(false)
+  otpAttempts              Int                    @default(0)
+  otpLastSentAt            DateTime?
+  pendingEmail             String?
+  pendingEmailOtpHash      String?
+  pendingEmailOtpExpiresAt DateTime?
+  aichatSessions           AIChatSession[]
+  channelCategories        ChannelCategory[]
+  comments                 Comment[]
+  feedScores               FeedScore[]
+  feedTrainingSnapshots    FeedTrainingSnapshot[]
+  likes                    Like[]
+  sentNotifications        Notification[]         @relation("NotificationSender")
+  notifications            Notification[]         @relation("UserNotifications")
+  playlists                Playlist[]
+  reportsMade              Report[]
+  searchHistories          SearchHistory[]
+  subscribers              Subscription[]         @relation("UserSubscribers")
+  subscriptions            Subscription[]         @relation("UserSubscriptions")
+  tweets                   Tweet[]
+  uploadSessions           UploadSession[]
+  events                   UserEvent[]
+  userFeatureOverrides     UserFeatureOverride[]
+  settings                 UserSettings?
+  videos                   Video[]                @relation("VideoOwner")
+  watchHistory             WatchHistory[]         @relation("UserWatchHistory")
 
   @@index([username])
   @@index([email])
@@ -61,42 +71,62 @@ model VideoTag {
   videoId String
   tagId   String
   tag     Tag    @relation(fields: [tagId], references: [id])
-  video   Video  @relation(fields: [videoId], references: [id])
+  video   Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@id([videoId, tagId])
 }
 
 model Video {
-  id                String          @id @default(uuid())
-  videoFile         String
-  thumbnail         String
-  title             String
-  description       String
-  duration          Int
-  views             Int             @default(0)
-  isPublished       Boolean         @default(true)
-  ownerId           String
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  thumbnailPublicId String
-  videoPublicId     String
-  aspectRatio       String?
-  isShort           Boolean         @default(false)
-  summary           String?
-  engagementScore   Float           @default(0)
-  popularityScore   Float           @default(0)
-  shareCount        Int             @default(0)
-  deletedAt         DateTime?
-  isDeleted         Boolean         @default(false)
-  comments          Comment[]
-  feedScores        FeedScore[]
-  likes             Like[]
-  notifications     Notification[]
-  playlistVideos    PlaylistVideo[]
-  owner             User            @relation("VideoOwner", fields: [ownerId], references: [id])
-  categories        VideoCategory[]
-  tags              VideoTag[]
-  watchHistory      WatchHistory[]  @relation("VideoWatchHistory")
+  id                      String                   @id @default(uuid())
+  videoFile               String
+  thumbnail               String
+  title                   String
+  description             String
+  duration                Int
+  views                   Int                      @default(0)
+  isPublished             Boolean                  @default(true)
+  ownerId                 String
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  thumbnailPublicId       String
+  videoPublicId           String
+  aspectRatio             String?
+  isShort                 Boolean                  @default(false)
+  summary                 String?
+  engagementScore         Float                    @default(0)
+  popularityScore         Float                    @default(0)
+  shareCount              Int                      @default(0)
+  deletedAt               DateTime?
+  isDeleted               Boolean                  @default(false)
+  isHlsReady              Boolean                  @default(false)
+  masterPlaylistUrl       String?
+  playbackUrl             String?
+  processingLockedAt      DateTime?
+  processingStatus        ProcessingStatus         @default(PENDING)
+  processingWorkerId      String?
+  processingProgress      Float?                   @default(0)
+  processingStep          String?
+  processingStartedAt     DateTime?
+  processingCompletedAt   DateTime?
+  processingError         String?
+  storageProvider         String?
+  storageRegion           String?
+  availableQualities      String[]                 @default(["MAX", "1080p", "720p", "480p"])
+  aichatSessions          AIChatSession[]
+  comments                Comment[]
+  feedScores              FeedScore[]
+  feedTrainingSnapshots   FeedTrainingSnapshot[]
+  likes                   Like[]
+  notifications           Notification[]
+  playlistVideos          PlaylistVideo[]
+  uploadSessions          UploadSession[]
+  owner                   User                     @relation("VideoOwner", fields: [ownerId], references: [id],onDelete: Restrict)
+  videoAnalyticsSnapshots VideoAnalyticsSnapshot[]
+  categories              VideoCategory[]
+  videoProcessingJobs     VideoProcessingJob[]
+  tags                    VideoTag[]
+  transcript              VideoTranscript?
+  watchHistory            WatchHistory[]           @relation("VideoWatchHistory")
 
   @@index([ownerId])
   @@index([isPublished])
@@ -109,6 +139,130 @@ model Video {
   @@index([isDeleted, isPublished, createdAt])
   @@index([isDeleted, ownerId, createdAt])
   @@index([ownerId, isDeleted, deletedAt])
+  @@index([ownerId, createdAt])
+  @@index([isPublished, popularityScore])
+}
+
+model VideoProcessingJob {
+  id             String           @id @default(uuid())
+  videoId        String
+  status         ProcessingStatus @default(PENDING)
+  progress       Float            @default(0)
+  currentStep    String?
+  error          String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  idempotencyKey String?          @unique
+  jobType        JobType          @default(VIDEO_PROCESSING)
+  video          Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([status])
+}
+
+model BackgroundJob {
+  id            String    @id @default(uuid())
+  jobType       JobType
+  status        JobStatus @default(PENDING)
+  payload       Json?
+  result        Json?
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3)
+  scheduledFor  DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  error         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  correlationId String?
+
+  @@index([jobType])
+  @@index([status])
+  @@index([status, scheduledFor])
+}
+
+model UploadSession {
+  id             String       @id @default(uuid())
+  userId         String
+  videoId        String?
+  status         UploadStatus @default(INITIATED)
+  totalChunks    Int?
+  uploadedChunks Int          @default(0)
+  uploadUrl      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  totalSize      BigInt?
+  uploadedSize   BigInt?
+  uploadType     String? // VIDEO, IMAGE, AVATAR, POST
+  cancelledAt    DateTime?
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video          Video?       @relation(fields: [videoId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([videoId])
+}
+
+model SearchHistory {
+  id        String   @id @default(uuid())
+  userId    String?
+  query     String
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([query])
+  @@index([userId])
+}
+
+model VideoAnalyticsSnapshot {
+  id               String   @id @default(uuid())
+  videoId          String
+  views            Int
+  likes            Int
+  comments         Int
+  shares           Int
+  watchTimeSeconds Int
+  snapshotDate     DateTime
+  video            Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId, snapshotDate])
+}
+
+model FeedTrainingSnapshot {
+  id        String   @id @default(uuid())
+  userId    String
+  videoId   String
+  features  Json
+  label     Float?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([videoId])
+}
+
+model FeatureFlag {
+  id                   String                @id @default(uuid())
+  key                  String                @unique
+  description          String?
+  isEnabled            Boolean               @default(false)
+  rolloutPercentage    Int                   @default(100)
+  createdAt            DateTime              @default(now())
+  userFeatureOverrides UserFeatureOverride[]
+}
+
+model UserFeatureOverride {
+  id        String      @id @default(uuid())
+  userId    String
+  featureId String
+  isEnabled Boolean
+  feature   FeatureFlag @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, featureId])
 }
 
 model Category {
@@ -167,6 +321,7 @@ model WatchHistory {
   @@index([videoId])
   @@index([lastWatchedAt])
   @@index([userId, updatedAt])
+  @@index([userId, lastWatchedAt])
 }
 
 model Subscription {
@@ -176,8 +331,8 @@ model Subscription {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
   notificationLevel NotificationLevel @default(PERSONALIZED)
-  channel           User              @relation("UserSubscribers", fields: [channelId], references: [id])
-  subscriber        User              @relation("UserSubscriptions", fields: [subscriberId], references: [id])
+  channel           User              @relation("UserSubscribers", fields: [channelId], references: [id], onDelete: Cascade)
+  subscriber        User              @relation("UserSubscriptions", fields: [subscriberId], references: [id], onDelete: Cascade)
 
   @@unique([subscriberId, channelId])
   @@index([channelId])
@@ -318,7 +473,7 @@ model Notification {
   videoId   String?
   sender    User?            @relation("NotificationSender", fields: [senderId], references: [id])
   user      User             @relation("UserNotifications", fields: [userId], references: [id])
-  video     Video?           @relation(fields: [videoId], references: [id])
+  video     Video?           @relation(fields: [videoId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([userId, isRead])
@@ -342,6 +497,65 @@ model FeedScore {
   @@unique([userId, videoId])
   @@index([userId])
   @@index([userId, score])
+  @@index([userId, videoId])
+  @@index([score, createdAt])
+}
+
+model VideoTranscript {
+  id         String   @id @default(uuid())
+  videoId    String   @unique
+  transcript String
+  language   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+model AIChatSession {
+  id        String          @id @default(uuid())
+  userId    String?
+  videoId   String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  messages  AIChatMessage[]
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  video     Video?          @relation(fields: [videoId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([videoId])
+  @@index([createdAt])
+}
+
+model AIChatMessage {
+  id         String        @id @default(uuid())
+  sessionId  String
+  role       AIRole
+  content    String
+  tokensUsed Int?
+  createdAt  DateTime      @default(now())
+  session    AIChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+model UserEvent {
+  id         String          @id @default(uuid())
+  userId     String?
+  sessionId  String?
+  eventType  EventType
+  entityType EventEntityType
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime        @default(now())
+  user       User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
 }
 
 model UserSettings {
@@ -371,6 +585,93 @@ model UserSettings {
   user                       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+model Report {
+  id          String           @id @default(uuid())
+  reporterId  String
+  targetType  ReportTargetType
+  targetId    String
+  reason      String
+  description String?
+  status      ReportStatus     @default(PENDING)
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+  reporter    User             @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([reporterId])
+  @@index([targetType, targetId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum VideoQuality {
+  P1080
+  P720
+  P480
+  P360
+}
+
+enum JobType {
+  VIDEO_PROCESSING
+  AI_SUMMARY
+  AI_CHAT
+  EMAIL
+  NOTIFICATION
+  FEED_RECOMPUTE
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  DEAD
+}
+
+enum UploadStatus {
+  INITIATED
+  UPLOADING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AIRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum EventType {
+  VIDEO_VIEW
+  VIDEO_COMPLETE
+  VIDEO_LIKE
+  VIDEO_SHARE
+  VIDEO_COMMENT
+  SEARCH
+  SUBSCRIBE
+  UNSUBSCRIBE
+  NOT_INTERESTED
+  REPORT
+  LOGIN
+  LOGOUT
+}
+
+enum EventEntityType {
+  VIDEO
+  USER
+  COMMENT
+  PLAYLIST
+  CHANNEL
+}
+
 enum NotificationLevel {
   ALL
   PERSONALIZED
@@ -396,4 +697,18 @@ enum AuthProvider {
 enum ProfileVisibility {
   PUBLIC
   PRIVATE
+}
+
+enum ReportTargetType {
+  VIDEO
+  COMMENT
+  USER
+  CHANNEL
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  REJECTED
+  ACTION_TAKEN
 }

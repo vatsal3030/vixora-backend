@@ -16,7 +16,6 @@ export const getChannelInfo = asyncHandler(async (req, res) => {
             coverImage: true,
             channelDescription: true,
             channelLinks: true,
-            channelCategory: true,
             createdAt: true,
             _count: {
                 select: {
@@ -52,7 +51,7 @@ export const getChannelInfo = asyncHandler(async (req, res) => {
             avatar: channel.avatar,
             coverImage: channel.coverImage,
             description: channel.channelDescription,
-            category: channel.channelCategory,
+            category: null,
             links: channel.channelLinks,
             subscribersCount: channel._count.subscribers,
             videosCount: channel._count.videos,
@@ -76,6 +75,9 @@ export const getChannelVideos = asyncHandler(async (req, res) => {
         where: {
             ownerId: channelId,
             isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true,
             isShort: false
         },
         orderBy,
@@ -95,6 +97,9 @@ export const getChannelVideos = asyncHandler(async (req, res) => {
         where: {
             ownerId: channelId,
             isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true,
             isShort: false
         }
     });

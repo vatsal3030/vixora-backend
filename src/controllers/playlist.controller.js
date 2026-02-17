@@ -87,7 +87,7 @@ export const getUserPlaylists = asyncHandler(async (req, res) => {
     const whereClause = {
         ownerId: userId,
         isDeleted: false, // ✅ FIX: exclude deleted playlists
-        ...(isSelf ? {} : { isPublic: true, name: { not: WATCH_LATER_NAME } }),
+        ...(isSelf ? {} : { isPublic: true, NOT: { name: WATCH_LATER_NAME } }),
     };
 
     const trimmedQuery = query.trim();
@@ -698,7 +698,18 @@ export const toggleWatchLater = asyncHandler(async (req, res) => {
 });
 
 export const getWatchLaterVideos = asyncHandler(async (req, res) => {
+
     const userId = req.user.id;
+
+    let { page = "1", limit = "20" } = req.query;
+
+    page = Number(page);
+    limit = Number(limit);
+
+    if (isNaN(page) || page < 1) page = 1;
+    if (isNaN(limit) || limit < 1 || limit > 50) limit = 20;
+
+    const skip = (page - 1) * limit;
 
     const playlist = await prisma.playlist.findFirst({
         where: {
@@ -710,59 +721,66 @@ export const getWatchLaterVideos = asyncHandler(async (req, res) => {
             id: true,
             videoCount: true,
             totalDuration: true,
-            lastVideoAddedAt: true,
-            videos: {
-                orderBy: {
-                    createdAt: "desc",
-                },
-                select: {
-                    video: {
-                        select: {
-                            id: true,
-                            title: true,
-                            thumbnail: true,
-                            duration: true,
-                            views: true,
-                            createdAt: true,
-                        },
-                    },
-                },
-            },
-        },
+            lastVideoAddedAt: true
+        }
     });
-
 
     if (!playlist) {
         return res.status(200).json(
-            new ApiResponse(
-                200,
-                {
-                    videos: [],
-                    metadata: {
-                        videoCount: 0,
-                        totalDuration: 0,
-                        lastVideoAddedAt: null,
-                    },
+            new ApiResponse(200, {
+                videos: [],
+                pagination: {
+                    currentPage: page,
+                    totalPages: 0,
+                    totalVideos: 0
                 },
-                "No watch later videos"
-            )
+                metadata: {
+                    videoCount: 0,
+                    totalDuration: 0,
+                    lastVideoAddedAt: null
+                }
+            }, "No watch later videos")
         );
     }
 
+    // ✅ PAGINATED FETCH FROM JOIN TABLE
+    const videos = await prisma.playlistVideo.findMany({
+        where: {
+            playlistId: playlist.id
+        },
+        orderBy: {
+            createdAt: "desc"
+        },
+        skip,
+        take: limit,
+        select: {
+            video: {
+                select: {
+                    id: true,
+                    title: true,
+                    thumbnail: true,
+                    duration: true,
+                    views: true,
+                    createdAt: true
+                }
+            }
+        }
+    });
 
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                videos: playlist.videos.map(v => v.video),
-                metadata: {
-                    videoCount: playlist.videoCount,
-                    totalDuration: playlist.totalDuration,
-                    lastVideoAddedAt: playlist.lastVideoAddedAt,
-                },
+        new ApiResponse(200, {
+            videos: videos.map(v => v.video),
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(playlist.videoCount / limit),
+                totalVideos: playlist.videoCount
             },
-            "Watch later videos fetched"
-        )
+            metadata: {
+                videoCount: playlist.videoCount,
+                totalDuration: playlist.totalDuration,
+                lastVideoAddedAt: playlist.lastVideoAddedAt
+            }
+        }, "Watch later videos fetched")
     );
 
 });

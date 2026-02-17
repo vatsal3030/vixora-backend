@@ -1,35 +1,42 @@
 # Frontend API Handoff
 
-Last updated: 2026-02-12
-Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`, `prisma/schema.prisma`
+Last updated: 2026-02-17
+Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`
 
-## 1) Base and global behavior
+## 1) Base URL and Global Behavior
 
-- API base path: `/api/v1`
+- API base: `/api/v1`
+- Media base (separate): `/api/media`
 - Health check: `GET /healthz`
-- Root: `GET /`
-- Global rate limit: `100 requests / minute / IP` on `/api/*`
+- Root check: `GET /`
+- Global rate limit: `100 requests/min/IP` on `/api/*`
 
 ### Auth transport
 
-- Protected routes require `accessToken` from:
-- `HttpOnly` cookie (`accessToken`) OR
-- `Authorization: Bearer <token>` header
+Protected routes accept token from either:
 
-### Response format
+- `HttpOnly` cookie: `accessToken`
+- `Authorization: Bearer <accessToken>` header
 
-Successful APIs mostly return:
+Frontend should always send credentials:
+
+- `fetch`: `credentials: "include"`
+- Axios: `withCredentials: true`
+
+## 2) Response and Error Format
+
+### Standard success envelope (most APIs)
 
 ```json
 {
   "statusCode": 200,
   "data": {},
-  "message": "...",
+  "message": "Success",
   "success": true
 }
 ```
 
-Error format (global error middleware):
+### Standard error envelope
 
 ```json
 {
@@ -38,247 +45,465 @@ Error format (global error middleware):
 }
 ```
 
-## 2) Frontend integration rules
+Notes:
 
-- Send credentials for cookie auth (`withCredentials: true` in Axios / `credentials: "include"` in fetch).
-- Read payload from `response.data.data` (not from top-level directly).
-- On `401`, call refresh endpoint, then retry original request.
-- File upload endpoints use `multipart/form-data`.
+- Read API payload from `response.data.data`.
+- `GET /healthz` and `GET /` are not wrapped in `ApiResponse`.
 
-## 3) Route catalog
+## 3) Direct Cloudinary Upload Architecture (Important)
+
+Backend contract is now:
+
+1. Frontend creates upload session
+2. Frontend asks backend for signed upload params
+3. Frontend uploads file directly to Cloudinary
+4. Frontend sends Cloudinary metadata back to backend
+5. Backend verifies Cloudinary ownership and starts processing
+
+### 3.1 Video Upload Flow (Frontend sequence)
+
+#### Step A: Create upload session
+
+- Endpoint: `POST /api/v1/upload/session` (auth)
+- Body:
+
+```json
+{
+  "fileName": "my-video.mp4",
+  "fileSize": 123456789,
+  "mimeType": "video/mp4"
+}
+```
+
+- Success `data` includes session fields (`id`, `status`, `totalSize`, `uploadedSize`, etc.)
+- `totalSize`/`uploadedSize` are returned as strings (BigInt-safe)
+
+#### Step B: Get signatures
+
+Get one signature for video and one for thumbnail.
+
+- Endpoint: `GET /api/v1/upload/signature?resourceType=video` (auth)
+- Endpoint: `GET /api/v1/upload/signature?resourceType=thumbnail` (auth)
+
+Response `data`:
+
+```json
+{
+  "timestamp": 1739786400,
+  "signature": "...",
+  "publicId": "videos/<userId>/<uuid>",
+  "cloudName": "...",
+  "api_key": "...",
+  "resourceType": "video"
+}
+```
+
+`resourceType` to Cloudinary folder mapping from backend:
+
+- `video` -> `videos/<userId>`
+- `thumbnail` -> `thumbnails/<userId>`
+- `avatar` -> `avatars/<userId>`
+- `post` -> `posts/<userId>`
+- fallback -> `misc/<userId>`
+
+#### Step C: Upload directly to Cloudinary
+
+Use Cloudinary upload API directly from frontend with signed params from Step B.
+
+- Video upload URL: `https://api.cloudinary.com/v1_1/<cloudName>/video/upload`
+- Image upload URL (thumbnail/avatar/post): `https://api.cloudinary.com/v1_1/<cloudName>/image/upload`
+
+Send multipart form fields:
+
+- `file`
+- `api_key`
+- `timestamp`
+- `signature`
+- `public_id`
+
+Keep Cloudinary response values for finalize:
+
+- For video: `secure_url`, `public_id`, `duration`, `width`, `height`
+- For thumbnail: `secure_url`, `public_id`
+
+#### Step D (optional but recommended): Push upload progress
+
+- Endpoint: `PATCH /api/v1/upload/progress/:sessionId` (auth)
+- Body:
+
+```json
+{
+  "uploadedBytes": 9876543
+}
+```
+
+Notes:
+
+- `uploadedBytes` must be non-negative and <= session `totalSize`
+- Can be sent as number or numeric string
+
+#### Step E: Finalize upload
+
+- Endpoint: `POST /api/v1/upload/finalize/:sessionId` (auth)
+- Body:
+
+```json
+{
+  "title": "My video title",
+  "description": "Video description",
+  "publicId": "videos/<userId>/<uuid>",
+  "thumbnailPublicId": "thumbnails/<userId>/<uuid>",
+  "duration": 142.6,
+  "width": 1920,
+  "height": 1080,
+  "isShort": false,
+  "tags": ["news", "daily"]
+}
+```
+
+Backend behavior on finalize:
+
+- Requires `title`, `description`, `publicId`, `thumbnailPublicId` (URLs are not required)
+- Accepts optional `isShort` (`true`/`false`)
+- Verifies uploaded assets belong to current user folder
+- Uses Cloudinary verified URLs (not blindly trusting client URL)
+- Creates DB video row with `processingStatus = PENDING`
+- Marks upload session `COMPLETED`
+- Enqueues background processing job
+
+#### Step F: Poll processing and publish
+
+- Poll status: `GET /api/v1/videos/:videoId/processing-status` (auth)
+- Publish when ready: `PATCH /api/v1/videos/:videoId/publish` (auth)
+
+Processing status enums:
+
+- `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`, `CANCELLED`
+
+Upload session status enums:
+
+- `INITIATED`, `UPLOADING`, `PROCESSING`, `COMPLETED`, `FAILED`
+
+### 3.2 Image metadata finalize APIs
+
+#### Avatar update
+
+1. Upload avatar to Cloudinary under `avatars/<userId>`
+2. Call: `PATCH /api/v1/users/update-avatar` (auth)
+3. Body:
+
+```json
+{
+  "avatarPublicId": "avatars/<userId>/<uuid>"
+}
+```
+
+#### Cover image update
+
+1. Upload cover image to Cloudinary under `covers/<userId>`
+2. Call: `PATCH /api/v1/users/update-coverImage` (auth)
+3. Body:
+
+```json
+{
+  "coverImagePublicId": "covers/<userId>/<uuid>"
+}
+```
+
+#### Tweet image
+
+- `POST /api/v1/tweets` expects optional `imagePublicId` from `tweets/<userId>`
+
+```json
+{
+  "content": "tweet text",
+  "imagePublicId": "tweets/<userId>/<uuid>"
+}
+```
+
+## 4) Route Catalog (Frontend usage)
 
 ## System
 
-| Method | Endpoint | Auth | Purpose | Returns (`data`) |
-|---|---|---|---|---|
-| GET | `/healthz` | No | Liveness check | `{ status: "ok" }` |
-| GET | `/` | No | Basic backend info | `{ success, message, version }` |
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| GET | `/healthz` | No | Liveness check |
+| GET | `/` | No | Backend status |
 
-## OAuth Auth
+## OAuth
 
 Base: `/api/v1/auth`
 
-| Method | Endpoint | Auth | Purpose | Notes |
-|---|---|---|---|---|
-| GET | `/google` | No | Start Google OAuth | Redirect flow |
-| GET | `/google/callback` | No | OAuth callback | Sets cookies + redirects to frontend |
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| GET | `/google` | No | Start Google OAuth |
+| GET | `/google/callback` | No | OAuth callback (sets cookies + redirects frontend) |
 
-## User/Auth APIs
+## Users/Auth
 
 Base: `/api/v1/users`
 
-| Method | Endpoint | Auth | Params | Query | Body | Returns (`data`) |
-|---|---|---|---|---|---|---|
-| POST | `/register` | No | - | - | multipart: `avatar` (required), `coverImage` (optional), `fullName`, `email`, `username`, `password` | `{}` |
-| POST | `/verify-email` | No | - | - | `{ identifier, otp }` | `{}` |
-| POST | `/resend-otp` | No | - | - | `{ identifier }` | `{}` |
-| POST | `/login` | No | - | - | `{ email? , username? , password }` | `{ user }` + sets cookies |
-| POST | `/logout` | Yes | - | - | - | `{}` + clears cookies |
-| POST | `/refresh-token` | No (needs refresh token cookie/body) | - | - | `{ refreshToken? }` | `{}` + rotates cookies |
-| GET | `/current-user` | Yes | - | - | - | current user safe fields |
-| POST | `/forgot-password` | No | - | - | `{ email }` | `{}` |
-| POST | `/forgot-password/verify` | No | - | - | `{ email, otp }` | `{}` |
-| POST | `/reset-password` | No | - | - | `{ email, otp, newPassword }` | `{}` |
-| POST | `/change-password` | Yes | - | - | `{ oldPassword, newPassword }` | `{}` |
-| PATCH | `/update-account` | Yes | - | - | `{ fullName, email }` | updated user |
-| PATCH | `/update-avatar` | Yes | - | - | multipart: `avatar` | updated user |
-| PATCH | `/update-coverImage` | Yes | - | - | multipart: `coverImage` | updated user |
-| PATCH | `/update-description` | Yes | - | - | `{ channelDescription, channelLinks, channelCategory }` | updated user |
-| GET | `/u/:username` | Yes | `username` | - | - | channel profile + subscription counts |
-| GET | `/id/:userId` | Yes | `userId` | - | - | user profile by id |
-| DELETE | `/delete-account` | Yes | - | - | - | `{}` |
-| PATCH | `/restore-account/request` | No | - | - | `{ email? , username? }` | `{}` |
-| PATCH | `/restore-account/confirm` | No | - | - | `{ email? , username? , otp }` | restored user + sets cookies |
+| Method | Endpoint | Auth | Request body |
+|---|---|---|---|
+| POST | `/register` | No | `{ fullName, email, username, password }` |
+| POST | `/verify-email` | No | `{ identifier, otp }` |
+| POST | `/resend-otp` | No | `{ identifier }` |
+| POST | `/login` | No | `{ email? OR username?, password }` |
+| POST | `/logout` | Yes | none |
+| POST | `/refresh-token` | No | `{ refreshToken? }` or cookie |
+| GET | `/current-user` | Yes | none |
+| POST | `/forgot-password` | No | `{ email }` |
+| POST | `/forgot-password/verify` | No | `{ email, otp }` |
+| POST | `/reset-password` | No | `{ email, otp, newPassword }` |
+| POST | `/change-password` | Yes | `{ oldPassword, newPassword }` |
+| PATCH | `/update-account` | Yes | `{ fullName }` |
+| PATCH | `/update-avatar` | Yes | `{ avatarPublicId }` |
+| PATCH | `/update-coverImage` | Yes | `{ coverImagePublicId }` |
+| PATCH | `/update-description` | Yes | `{ channelDescription?, channelLinks? }` |
+| GET | `/u/:username` | Yes | none |
+| GET | `/id/:userId` | Yes | none |
+| DELETE | `/delete-account` | Yes | none |
+| PATCH | `/restore-account/request` | No | `{ email? OR username? }` |
+| PATCH | `/restore-account/confirm` | No | `{ email? OR username?, otp }` |
+| POST | `/change-email/request` | Yes | `{ email }` |
+| POST | `/change-email/confirm` | Yes | `{ otp }` |
+| POST | `/change-email/cancel` | Yes | none |
+
+## Upload
+
+Base: `/api/v1/upload`
+
+| Method | Endpoint | Auth | Request |
+|---|---|---|---|
+| POST | `/session` | Yes | `{ fileName, fileSize, mimeType }` |
+| PATCH | `/session/:sessionId/cancel` | Yes | none |
+| GET | `/signature?resourceType=video|thumbnail|avatar|post` | Yes | query param |
+| PATCH | `/progress/:sessionId` | Yes | `{ uploadedBytes }` |
+| POST | `/finalize/:sessionId` | Yes | video + thumbnail metadata payload |
+
+## Media
+
+Base: `/api/media`
+
+| Method | Endpoint | Auth | Request |
+|---|---|---|---|
+| POST | `/finalize/:sessionId` | Yes | `{ uploadType, cloudinaryUrl, publicId }` where `uploadType=avatar|coverImage` |
+| DELETE | `/:type` | Yes | `type=avatar|coverImage` |
 
 ## Videos
 
-Base: `/api/v1/videos` (all routes protected)
+Base: `/api/v1/videos` (all protected)
 
-| Method | Endpoint | Auth | Params | Query | Body | Returns (`data`) |
-|---|---|---|---|---|---|---|
-| GET | `/` | Yes | - | `page, limit, query, sortBy, sortType, isShort, tags` | - | `{ videos, pagination }` |
-| POST | `/` | Yes | - | - | multipart: `videoFile`, `thumbnail`, fields: `title`, `description`, `tags`, `isShort?` | created video |
-| GET | `/me` | Yes | - | `page, limit, query, isShort, sortBy, sortType, tags` | - | `{ videos, pagination }` |
-| GET | `/user/:userId` | Yes | `userId` | `page, limit, query, sortBy, sortType, isShort` | - | `{ videos, pagination }` |
-| GET | `/:videoId` | Yes | `videoId` | - | - | rich video detail (`likesCount`, `commentsCount`, `isLiked`, `owner`, `tags`) |
-| PATCH | `/:videoId` | Yes | `videoId` | - | body: `title?`, `description?`, optional multipart `thumbnail` | updated video |
-| DELETE | `/:videoId` | Yes | `videoId` | - | - | `{}` (soft delete) |
-| PATCH | `/:videoId/publish` | Yes | `videoId` | - | - | `{ id, isPublished }` |
-| GET | `/trash/me` | Yes | - | `page, limit, sortBy, sortType, isShort` | - | deleted videos list |
-| PATCH | `/:videoId/restore` | Yes | `videoId` | - | - | restored video |
+| Method | Endpoint | Query/body |
+|---|---|---|
+| GET | `/` | query: `page,limit,query,sortBy,sortType,isShort,tags` |
+| GET | `/me` | query: `page,limit,query,sortBy,sortType,isShort,tags` |
+| GET | `/user/:userId` | query: `page,limit,query,sortBy,sortType,isShort` |
+| GET | `/trash/me` | query: `page,limit,sortBy,sortType,isShort` |
+| GET | `/:videoId/processing-status` | none |
+| PATCH | `/:videoId/cancel-processing` | none |
+| PATCH | `/:videoId/publish` | none |
+| PATCH | `/:videoId/restore` | none |
+| GET | `/:videoId` | none |
+| PATCH | `/:videoId` | body: `{ title?, description? }` |
+| DELETE | `/:videoId` | none |
 
-## Watch endpoint
+Note: There is no `POST /api/v1/videos` route in current backend. Video creation is via `/api/v1/upload/finalize/:sessionId`.
+
+## Watch (public)
 
 Base: `/api/v1/watch`
 
-| Method | Endpoint | Auth | Purpose | Returns (`data`) |
-|---|---|---|---|---|
-| GET | `/:videoId` | No | public watch fetch + increments counters | raw video object |
+| Method | Endpoint | Auth | Purpose |
+|---|---|---|---|
+| GET | `/:videoId` | No | Public watch payload + increments views |
 
 ## Feed
 
 Base: `/api/v1/feed`
 
-| Method | Endpoint | Auth | Query | Returns (`data`) |
-|---|---|---|---|---|
-| GET | `/home` | Yes | `page, limit, sortBy, sortType` | `{ videos, pagination }` with `watchProgress` |
-| GET | `/subscriptions` | Yes | `page, limit, isShort` | `{ videos, pagination }` with `watchProgress` |
-| GET | `/trending` | No | `page, limit, isShort` | `{ videos, pagination }` |
-| GET | `/shorts` | No | `page, limit` | `{ shorts, pagination }` |
+| Method | Endpoint | Auth | Query |
+|---|---|---|---|
+| GET | `/home` | Yes | `page,limit,sortBy,sortType` |
+| GET | `/subscriptions` | Yes | `page,limit,isShort` |
+| GET | `/trending` | No | `page,limit,isShort` |
+| GET | `/shorts` | No | `page,limit` |
 
 ## Comments
 
-Base: `/api/v1/comments` (all routes protected)
+Base: `/api/v1/comments` (protected)
 
-| Method | Endpoint | Auth | Params | Query | Body | Returns (`data`) |
-|---|---|---|---|---|---|---|
-| GET | `/:videoId` | Yes | `videoId` | `page, limit, sortType` | - | `{ comments, pagination }` |
-| POST | `/:videoId` | Yes | `videoId` | - | `{ content }` | created comment |
-| PATCH | `/c/:commentId` | Yes | `commentId` | - | `{ content }` | updated comment |
-| DELETE | `/c/:commentId` | Yes | `commentId` | - | - | `{}` |
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/:videoId` | query: `page,limit,sortType` |
+| POST | `/:videoId` | body: `{ content }` |
+| PATCH | `/c/:commentId` | body: `{ content }` |
+| DELETE | `/c/:commentId` | none |
 
 ## Likes
 
-Base: `/api/v1/likes` (all routes protected)
+Base: `/api/v1/likes` (protected)
 
-| Method | Endpoint | Auth | Params | Body | Returns (`data`) |
-|---|---|---|---|---|---|
-| POST | `/toggle/v/:videoId` | Yes | `videoId` | - | `{ status: "liked" | "unliked" }` |
-| POST | `/toggle/c/:commentId` | Yes | `commentId` | - | `{ status: "liked" | "unliked" }` |
-| POST | `/toggle/t/:tweetId` | Yes | `tweetId` | - | `{ status: "liked" | "unliked" }` |
-| GET | `/videos` | Yes | - | - | `{ videos, pagination }` |
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/toggle/v/:videoId` | Toggle video like |
+| POST | `/toggle/c/:commentId` | Toggle comment like |
+| POST | `/toggle/t/:tweetId` | Toggle tweet like |
+| GET | `/videos` | Liked videos list |
 
 ## Subscriptions
 
-Base: `/api/v1/subscriptions` (all routes protected)
+Base: `/api/v1/subscriptions` (protected)
 
-| Method | Endpoint | Auth | Params | Query/Body | Returns (`data`) |
-|---|---|---|---|---|---|
-| GET | `/` | Yes | - | `page, limit` | `{ videos, pagination }` |
-| POST | `/c/:channelId/subscribe` | Yes | `channelId` | - | `{ status, subscriberCount }` |
-| GET | `/c/:channelId/subscribers/count` | Yes | `channelId` | - | `{ subscriberCount }` |
-| GET | `/u/subscriptions` | Yes | - | - | subscribed channels array |
-| PATCH | `/c/:channelId/notifications` | Yes | `channelId` | body `{ level }` | subscription row |
-| GET | `/c/:channelId/status` | Yes | `channelId` | - | `{ isSubscribed, subscriptionId, notificationLevel }` |
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/` | query: `page,limit` |
+| POST | `/c/:channelId/subscribe` | none |
+| GET | `/c/:channelId/subscribers/count` | none |
+| GET | `/u/subscriptions` | none |
+| PATCH | `/c/:channelId/notifications` | body: `{ level }` where `ALL|PERSONALIZED|NONE` |
+| GET | `/c/:channelId/status` | none |
 
 ## Channels
 
-Base: `/api/v1/channels` (all routes protected)
+Base: `/api/v1/channels` (protected)
 
-| Method | Endpoint | Auth | Params | Query | Returns (`data`) |
-|---|---|---|---|---|---|
-| GET | `/:channelId` | Yes | `channelId` | - | channel profile + counts + `isSubscribed` |
-| GET | `/:channelId/videos` | Yes | `channelId` | `sort, page, limit` | `{ videos, pagination }` |
-| GET | `/:channelId/playlists` | Yes | `channelId` | `page, limit` | `{ playlists, pagination }` |
-| GET | `/:channelId/tweets` | Yes | `channelId` | `page, limit` | `{ tweets, pagination }` |
+| Method | Endpoint | Query |
+|---|---|---|
+| GET | `/:channelId` | none |
+| GET | `/:channelId/videos` | `sort=latest|popular|oldest,page,limit` |
+| GET | `/:channelId/playlists` | `page,limit` |
+| GET | `/:channelId/tweets` | `page,limit` |
 
 ## Playlists
 
-Base: `/api/v1/playlists` (all routes protected)
+Base: `/api/v1/playlists` (protected)
 
-| Method | Endpoint | Auth | Params | Query/Body | Returns (`data`) |
-|---|---|---|---|---|---|
-| POST | `/watch-later/:videoId` | Yes | `videoId` | - | `{ saved: boolean }` |
-| GET | `/watch-later` | Yes | - | - | `{ videos, metadata }` |
-| POST | `/` | Yes | - | body `{ name, description?, isPublic? }` | created playlist |
-| GET | `/user/me` | Yes | - | `page, limit, query, sortBy, sortType` | `{ playlists, pagination }` |
-| GET | `/user/:userId` | Yes | `userId` | `page, limit, query, sortBy, sortType` | `{ playlists, pagination }` |
-| GET | `/trash/me` | Yes | - | - | deleted playlists |
-| PATCH | `/:playlistId/restore` | Yes | `playlistId` | - | `{}` |
-| PATCH | `/add/:videoId/:playlistId` | Yes | `videoId, playlistId` | - | `{}` |
-| PATCH | `/remove/:videoId/:playlistId` | Yes | `videoId, playlistId` | - | `{}` |
-| PATCH | `/:playlistId/toggle-visibility` | Yes | `playlistId` | - | `{ isPublic }` |
-| GET | `/:playlistId` | Yes | `playlistId` | `page, limit` | playlist with paginated videos |
-| PATCH | `/:playlistId` | Yes | `playlistId` | body `{ name?, description? }` | updated playlist |
-| DELETE | `/:playlistId` | Yes | `playlistId` | - | `{}` (soft delete) |
+| Method | Endpoint | Request |
+|---|---|---|
+| POST | `/watch-later/:videoId` | toggle watch later |
+| GET | `/watch-later` | query: `page,limit` |
+| POST | `/` | body: `{ name, description?, isPublic? }` |
+| GET | `/user/me` | query: `page,limit,query,sortBy,sortType` |
+| GET | `/user/:userId` | query: `page,limit,query,sortBy,sortType` |
+| GET | `/trash/me` | none |
+| PATCH | `/:playlistId/restore` | none |
+| PATCH | `/add/:videoId/:playlistId` | none |
+| PATCH | `/remove/:videoId/:playlistId` | none |
+| PATCH | `/:playlistId/toggle-visibility` | none |
+| GET | `/:playlistId` | query: `page,limit` |
+| PATCH | `/:playlistId` | body: `{ name?, description? }` |
+| DELETE | `/:playlistId` | none |
 
 ## Tweets
 
-Base: `/api/v1/tweets` (all routes protected)
+Base: `/api/v1/tweets` (protected)
 
-| Method | Endpoint | Auth | Params | Query/Body | Returns (`data`) |
-|---|---|---|---|---|---|
-| POST | `/` | Yes | - | multipart: optional `tweetImage`, body `content` | created tweet |
-| GET | `/user/:userId` | Yes | `userId` | `page, limit, sortBy, sortType` | tweets array |
-| GET | `/:tweetId` | Yes | `tweetId` | - | tweet |
-| PATCH | `/:tweetId` | Yes | `tweetId` | body `{ content }` | updated tweet |
-| DELETE | `/:tweetId` | Yes | `tweetId` | - | `{}` |
-| PATCH | `/:tweetId/restore` | Yes | `tweetId` | - | `{}` |
-| GET | `/trash/me` | Yes | - | - | deleted tweets list |
+| Method | Endpoint | Request |
+|---|---|---|
+| POST | `/` | body: `{ content, imagePublicId? }` |
+| GET | `/user/:userId` | query: `page,limit,sortBy,sortType` |
+| GET | `/trash/me` | none |
+| PATCH | `/:tweetId/restore` | none |
+| GET | `/:tweetId` | none |
+| PATCH | `/:tweetId` | body: `{ content }` |
+| DELETE | `/:tweetId` | none |
 
 ## Notifications
 
-Base: `/api/v1/notifications` (all routes protected)
+Base: `/api/v1/notifications` (protected)
 
-| Method | Endpoint | Auth | Params | Query | Returns (`data`) |
-|---|---|---|---|---|---|
-| GET | `/` | Yes | - | `page, limit` | `{ notifications, pagination }` |
-| GET | `/unread-count` | Yes | - | - | `{ unreadCount }` |
-| GET | `/unread` | Yes | - | `page, limit` | `{ notifications, pagination }` |
-| PATCH | `/:notificationId/read` | Yes | `notificationId` | - | `{}` |
-| PATCH | `/read-all` | Yes | - | - | `{}` |
-| DELETE | `/:notificationId` | Yes | `notificationId` | - | `{}` |
-| DELETE | `/` | Yes | - | - | `{ deletedCount }` |
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/` | query: `page,limit` |
+| GET | `/unread-count` | none |
+| GET | `/unread` | query: `page,limit` |
+| PATCH | `/:notificationId/read` | none |
+| PATCH | `/read-all` | none |
+| DELETE | `/:notificationId` | none |
+| DELETE | `/` | none |
 
 ## Dashboard
 
-Base: `/api/v1/dashboard` (all routes protected)
+Base: `/api/v1/dashboard` (protected)
 
-| Method | Endpoint | Auth | Query | Returns (`data`) |
-|---|---|---|---|---|
-| GET | `/overview` | Yes | - | totals (`videos, views, likes, comments, subscribers`) |
-| GET | `/analytics` | Yes | `period=7d|30d|90d` | date-wise views array |
-| GET | `/top-videos` | Yes | `limit` | top videos |
-| GET | `/growth` | Yes | - | date-wise upload count |
-| GET | `/insights` | Yes | - | `{ avgViews, avgLikes, engagementRate }` |
+| Method | Endpoint | Query |
+|---|---|---|
+| GET | `/overview` | none |
+| GET | `/analytics` | `period=7d|30d|90d` |
+| GET | `/top-videos` | `limit` |
+| GET | `/growth` | none |
+| GET | `/insights` | none |
 
 ## Settings
 
-Base: `/api/v1/settings` (all routes protected)
+Base: `/api/v1/settings` (protected)
 
-| Method | Endpoint | Auth | Body | Returns (`data`) |
-|---|---|---|---|---|
-| GET | `/` | Yes | - | user settings |
-| PATCH | `/` | Yes | partial settings object | updated settings |
-| POST | `/reset` | Yes | - | default settings |
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/` | none |
+| PATCH | `/` | partial settings object |
+| POST | `/reset` | none |
 
-Allowed settings fields in PATCH: `profileVisibility`, `showSubscriptions`, `showLikedVideos`, `allowComments`, `allowMentions`, `emailNotifications`, `commentNotifications`, `subscriptionNotifications`, `systemAnnouncements`, `autoplayNext`, `defaultPlaybackSpeed`, `saveWatchHistory`, `showProgressBar`, `showViewCount`, `showVideoDuration`, `showChannelName`, `personalizeRecommendations`, `showTrending`, `hideShorts`.
+Allowed setting fields:
+
+- `profileVisibility` (`PUBLIC` or `PRIVATE`)
+- `showSubscriptions`
+- `showLikedVideos`
+- `allowComments`
+- `allowMentions`
+- `emailNotifications`
+- `commentNotifications`
+- `subscriptionNotifications`
+- `systemAnnouncements`
+- `autoplayNext`
+- `defaultPlaybackSpeed` (`0.25` to `3`)
+- `saveWatchHistory`
+- `showProgressBar`
+- `showViewCount`
+- `showVideoDuration`
+- `showChannelName`
+- `personalizeRecommendations`
+- `showTrending`
+- `hideShorts`
 
 ## Watch History
 
-Base: `/api/v1/watch-history` (all routes protected)
+Base: `/api/v1/watch-history` (protected)
 
-| Method | Endpoint | Auth | Params | Query/Body | Returns (`data`) |
-|---|---|---|---|---|---|
-| GET | `/` | Yes | - | `page, limit, query, isShort, sortBy, sortType` | `{ videos, pagination }` |
-| POST | `/` | Yes | - | body `{ videoId, progress, duration }` | saved/upserted watch row |
-| GET | `/:videoId` | Yes | `videoId` | - | watch row or `null` |
-| POST | `/bulk` | Yes | - | body `{ videoIds: string[] }` | map by `videoId` |
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/` | query: `page,limit,query,isShort,sortBy,sortType` |
+| POST | `/` | body: `{ videoId, progress, duration }` |
+| GET | `/:videoId` | none |
+| POST | `/bulk` | body: `{ videoIds: string[] }` |
 
-## 4) Data usage map for frontend screens
+## 5) Frontend Screen -> API Map
 
-- Login/Register/Forgot password: use `/users/*` endpoints.
-- Home (logged-in): `/feed/home`.
-- Subscriptions feed: `/feed/subscriptions` or `/subscriptions/`.
-- Explore/Trending: `/feed/trending`.
-- Shorts: `/feed/shorts`.
-- Video details page (rich): `/videos/:videoId` (auth required).
-- Public watch fallback: `/watch/:videoId`.
-- Comments: `/comments/:videoId` + `/likes/toggle/c/:commentId`.
-- Channel page: `/channels/:channelId` + `/channels/:channelId/videos` + `/channels/:channelId/playlists` + `/channels/:channelId/tweets`.
-- Playlists + Watch Later: `/playlists/*`.
-- Notifications bell: `/notifications/unread-count`, `/notifications`.
-- Continue watching/progress: `/watch-history` and `/watch-history/bulk`.
-- Creator dashboard: `/dashboard/*`.
+- Auth pages: `/api/v1/users/register`, `/login`, `/verify-email`, `/resend-otp`, `/refresh-token`
+- Home: `/api/v1/feed/home`
+- Subscriptions feed: `/api/v1/feed/subscriptions` or `/api/v1/subscriptions`
+- Trending: `/api/v1/feed/trending`
+- Shorts: `/api/v1/feed/shorts`
+- Video detail: `/api/v1/videos/:videoId`
+- Public watch page: `/api/v1/watch/:videoId`
+- Upload studio: `/api/v1/upload/session` -> `/api/v1/upload/signature` -> Cloudinary direct upload -> `/api/v1/upload/finalize/:sessionId` -> `/api/v1/videos/:videoId/processing-status` -> `/api/v1/videos/:videoId/publish`
+- Comments panel: `/api/v1/comments/:videoId`, `/api/v1/likes/toggle/c/:commentId`
+- Channel page: `/api/v1/channels/:channelId`, `/videos`, `/playlists`, `/tweets`
+- Playlists + watch later: `/api/v1/playlists/*`
+- Notification bell: `/api/v1/notifications/unread-count`, `/api/v1/notifications`
+- Continue watching: `/api/v1/watch-history`, `/api/v1/watch-history/bulk`
+- Creator analytics: `/api/v1/dashboard/*`
 
-## 5) Current backend caveats (important for frontend)
+## 6) Current Integration Constraints (Important)
 
-These are observed in current code and can affect integration:
+- Video creation is upload-session based. There is no direct `POST /api/v1/videos`.
+- Avatar/Cover update APIs require Cloudinary `publicId`, not file upload multipart.
+- Signature endpoint returns custom `resourceType` labels (`thumbnail`, `avatar`, `post`). For Cloudinary URL path, use `/image/upload` for non-video uploads.
+- Folder checks are strict in backend verification:
+  - video finalize expects `videos/<userId>` and `thumbnails/<userId>`
+  - avatar update expects `avatars/<userId>`
+  - cover update expects `covers/<userId>`
+  - tweet image expects `tweets/<userId>`
 
-- `GET /feed/home` can throw 500 for users with no personalization match.
-- `POST /likes/toggle/t/:tweetId` currently fails after like due server-side bug.
-- `POST /users/refresh-token` currently has refresh rotation bug.
-- Some user/channel fields are inconsistent with schema (`channelCategory`, `description`) and may fail on related APIs.
-- Soft-deleted videos may still appear in some feeds/detail endpoints.
-- Login/refresh/logout cookie flags are strict for HTTPS; local HTTP frontend may have auth-cookie issues.
-
+If frontend flow uses a different folder than backend expects, finalize/update call will fail with ownership mismatch.

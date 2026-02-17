@@ -4,35 +4,41 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 
 export const updateChannelVideoScores = async (channelId) => {
+
     const videos = await prisma.video.findMany({
-        where: { ownerId: channelId },
-        select: {
-            id: true,
-            views: true,
-            likes: true,
-            comments: true,
-            watchHistory: true
-        }
+        where: { 
+            ownerId: channelId,
+            isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true
+        },
+        select: { id: true, views: true }
     });
 
-    const updates = videos.map(video => {
+    for (const video of videos) {
+
+        const [likesCount, commentsCount, watchCount] = await Promise.all([
+            prisma.like.count({ where: { videoId: video.id } }),
+            prisma.comment.count({ where: { videoId: video.id } }),
+            prisma.watchHistory.count({ where: { videoId: video.id } })
+        ]);
+
         const score =
             video.views * 0.3 +
-            video.likes.length * 0.4 +
-            video.comments.length * 0.2 +
-            video.watchHistory.length * 0.1 +
-            5; // subscription bonus
+            likesCount * 0.4 +
+            commentsCount * 0.2 +
+            watchCount * 0.1 +
+            5;
 
-        return prisma.video.update({
+        await prisma.video.update({
             where: { id: video.id },
             data: {
                 popularityScore: score,
                 engagementScore: score / 10
             }
         });
-    });
-
-    await Promise.all(updates);
+    }
 };
 
 export const toggleSubscription = asyncHandler(async (req, res) => {
@@ -226,7 +232,10 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
     const videos = await prisma.video.findMany({
         where: {
             ownerId: { in: channelIds },
-            isPublished: true
+            isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true,
         },
         orderBy: {
             createdAt: "desc"
@@ -253,7 +262,10 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
     const totalVideos = await prisma.video.count({
         where: {
             ownerId: { in: channelIds },
-            isPublished: true
+            isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true,
         }
     });
 

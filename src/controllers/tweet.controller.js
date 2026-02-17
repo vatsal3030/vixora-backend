@@ -2,61 +2,50 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
-import uploadOnCloudinary, { deleteImageOnCloudinary } from "../utils/cloudinary.js";
-
-
+import { deleteImageOnCloudinary } from "../utils/cloudinary.js";
+import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
 
 export const createTweet = asyncHandler(async (req, res) => {
-    const { content } = req.body;
 
-    if (!content || content.trim().length === 0) {
-        throw new ApiError(400, "Tweet content is required");
+    const { content, imageUrl, imagePublicId } = req.body;
+
+    if (!content?.trim()) {
+        throw new ApiError(400, "Content required");
     }
 
-    let image = null;
-    let imageId = null;
-
-    // Optional image upload
-    if (req.files?.tweetImage?.[0]) {
-        const localPath = req.files.tweetImage[0].path;
-
-        const uploaded = await uploadOnCloudinary(localPath);
-
-        if (!uploaded) {
-            throw new ApiError(500, "Image upload failed");
-        }
-
-        image = uploaded.secure_url;
-        imageId = uploaded.public_id;
+    if (!req.user.emailVerified) {
+        throw new ApiError(403, "Verify email first");
     }
+
+    let finalImageUrl = null;
+    let finalImagePublicId = null;
+
+    if (imagePublicId) {
+
+        const resource = await verifyCloudinaryAssetOwnership(
+            imagePublicId,
+            `tweets/${req.user.id}`
+        );
+
+        finalImageUrl = resource.secure_url;
+        finalImagePublicId = resource.public_id;
+    }
+
 
     const tweet = await prisma.tweet.create({
         data: {
             content: content.trim(),
-            image,
-            imageId,
-            ownerId: req.user.id,
-        },
-        select: {
-            id: true,
-            content: true,
-            image: true,
-            createdAt: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    fullName: true,
-                    avatar: true,
-                },
-            },
-        },
+            image: finalImageUrl,
+            imageId: finalImagePublicId,
+            ownerId: req.user.id
+        }
     });
 
     return res.status(201).json(
-        new ApiResponse(201, tweet, "Tweet created successfully")
+        new ApiResponse(201, tweet, "Tweet created")
     );
 });
+
 
 export const getUserTweets = asyncHandler(async (req, res) => {
     const { userId } = req.params;
@@ -73,6 +62,18 @@ export const getUserTweets = asyncHandler(async (req, res) => {
     if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
 
     const skip = (page - 1) * limit;
+
+    const allowedSortFields = [
+        "createdAt",
+        "updatedAt"
+    ];
+
+    if (!allowedSortFields.includes(sortBy)) {
+        sortBy = "createdAt";
+    }
+
+    sortType = sortType === "asc" ? "asc" : "desc";
+
 
     const tweets = await prisma.tweet.findMany({
         where: {
@@ -164,16 +165,6 @@ export const getTweetById = asyncHandler(async (req, res) => {
     if (!tweet) {
         throw new ApiError(404, "Tweet not found");
     }
-
-    await prisma.tweet.deleteMany({
-        where: {
-            isDeleted: true,
-            updatedAt: {
-                lt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-            },
-        },
-    });
-
 
     return res.status(200).json(
         new ApiResponse(200, tweet, "Tweet fetched successfully")

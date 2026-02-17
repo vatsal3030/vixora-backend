@@ -8,15 +8,36 @@ import asyncHandler from "../utils/asyncHandler.js"
  */
 export const saveWatchProgress = asyncHandler(async (req, res) => {
   const userId = req.user.id;
-  const { videoId, progress, duration } = req.body;
+  let { videoId, progress, duration } = req.body;
 
-  console.log('Saving watch progress:', { userId, videoId, progress, duration });
-
-  if (!videoId || progress == null) {
+  if (!videoId || progress === undefined || progress === null) {
     throw new ApiError(400, "Video ID and progress are required");
   }
 
-  const completed = progress >= 95; // Consider 95% as completed
+  // ✅ Type coercion
+  progress = Number(progress);
+  duration = Number(duration || 0);
+
+  // ✅ Validation
+  if (!Number.isFinite(progress) || progress < 0 || progress > 100) {
+    throw new ApiError(400, "Progress must be between 0 and 100");
+  }
+
+  if (!Number.isFinite(duration) || duration < 0 || duration > 86400) {
+    throw new ApiError(400, "Invalid duration value");
+  }
+
+  const videoExists = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: { id: true }
+  });
+
+  if (!videoExists) {
+    throw new ApiError(404, "Video not found");
+  }
+
+
+  const completed = progress >= 95;
 
   const result = await prisma.watchHistory.upsert({
     where: {
@@ -24,7 +45,7 @@ export const saveWatchProgress = asyncHandler(async (req, res) => {
     },
     update: {
       progress,
-      duration: duration || 0,
+      duration,
       completed,
       lastWatchedAt: new Date()
     },
@@ -32,13 +53,11 @@ export const saveWatchProgress = asyncHandler(async (req, res) => {
       userId,
       videoId,
       progress,
-      duration: duration || 0,
+      duration,
       completed,
       lastWatchedAt: new Date()
     }
   });
-
-  console.log('Watch progress saved:', result);
 
   return res.json(new ApiResponse(200, result, "Progress saved"));
 });

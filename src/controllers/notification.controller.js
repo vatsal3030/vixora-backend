@@ -2,6 +2,7 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
+import { sanitizePagination } from "../utils/pagination.js";
 
 export const getAllNotifications = asyncHandler(async (req, res) => {
     const userId = req.user.id;
@@ -11,10 +12,8 @@ export const getAllNotifications = asyncHandler(async (req, res) => {
         limit = "10"
     } = req.query;
 
-    page = parseInt(page);
-    limit = parseInt(limit);
-
-    const skip = (page - 1) * limit;
+    const { page: safePage, limit: safeLimit, skip } =
+        sanitizePagination(page, limit);
 
     // 🔢 Total count for pagination metadata
     const total = await prisma.notification.count({
@@ -29,7 +28,7 @@ export const getAllNotifications = asyncHandler(async (req, res) => {
             createdAt: "desc"
         },
         skip,
-        take: limit,
+        take: safeLimit,
         include: {
             sender: {
                 select: {
@@ -90,9 +89,9 @@ export const getAllNotifications = asyncHandler(async (req, res) => {
                 notifications: formatted,
                 pagination: {
                     total,
-                    page,
-                    limit,
-                    totalPages: Math.ceil(total / limit)
+                    page: safePage,
+                    limit: safeLimit,
+                    totalPages: Math.ceil(total / safeLimit)
                 }
             },
             "All notifications fetched"
@@ -123,15 +122,10 @@ export const getUnreadNotifications = asyncHandler(async (req, res) => {
 
     const userId = req.user.id;
 
-    let {
-        page = "1",
-        limit = "10"
-    } = req.query;
+    let { page = "1", limit = "10" } = req.query;
 
-    page = parseInt(page);
-    limit = parseInt(limit);
-
-    const skip = (page - 1) * limit;
+    const { page: safePage, limit: safeLimit, skip } =
+        sanitizePagination(page, limit);
 
     const totalUnread = await prisma.notification.count({
         where: { userId, isRead: false }
@@ -144,7 +138,7 @@ export const getUnreadNotifications = asyncHandler(async (req, res) => {
         },
         orderBy: { createdAt: "desc" },
         skip,
-        take: limit,
+        take: safeLimit,
         select: {
             id: true,
             title: true,
@@ -162,9 +156,9 @@ export const getUnreadNotifications = asyncHandler(async (req, res) => {
                 notifications: unread,
                 pagination: {
                     total: totalUnread,
-                    page,
-                    limit,
-                    totalPages: Math.ceil(totalUnread / limit)
+                    page: safePage,
+                    limit: safeLimit,
+                    totalPages: Math.ceil(totalUnread / safeLimit)
                 }
             },
             "Unread notifications fetched"

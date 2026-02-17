@@ -21,6 +21,9 @@ import watchHistoryRouter from "./routes/watchHistory.routes.js";
 import feedRouter from "./routes/feed.routes.js";
 import settingRouter from "./routes/settings.routes.js";
 import authRouter from "./routes/auth.routes.js";
+import uploadRouter from "./routes/upload.routes.js";
+import mediaRoutes from "./routes/media.routes.js";
+
 import passport from "passport";
 import "./config/passport.js";
 
@@ -33,16 +36,22 @@ app.set("trust proxy", 1);
 app.use(helmet());
 
 const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",")
-  : ["http://localhost:5173","https://vixora-app.vercel.app","https://app.vixora.co.in/"];
+  ? process.env.CORS_ORIGIN.split(",").map(o => o.replace(/\/$/, ""))
+  : [
+    "http://localhost:5173",
+    "https://vixora-app.vercel.app",
+    "https://app.vixora.co.in"
+  ];
+
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // allow server-to-server & tools like Postman
       if (!origin) return callback(null, true);
 
-      if (allowedOrigins.includes(origin)) {
+      const normalizedOrigin = origin.replace(/\/$/, "");
+
+      if (allowedOrigins.includes(normalizedOrigin)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
@@ -69,7 +78,7 @@ app.get("/healthz", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
 
-    
+
 app.use(passport.initialize());
 
 /* ---------- ROUTES ---------- */
@@ -88,6 +97,9 @@ app.use("/api/v1/watch-history", watchHistoryRouter);
 app.use("/api/v1/feed", feedRouter);
 app.use("/api/v1/settings", settingRouter);
 app.use("/api/v1/auth", authRouter);
+app.use("/api/v1/upload", uploadRouter);
+app.use("/api/media", mediaRoutes);
+
 
 app.get("/", (req, res) => {
   res.status(200).json({

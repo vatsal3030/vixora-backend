@@ -3,6 +3,22 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import ApiError from "../utils/ApiError.js";
 
+const HOME_FEED_SELECT = {
+    id: true,
+    title: true,
+    thumbnail: true,
+    duration: true,
+    views: true,
+    createdAt: true,
+    owner: {
+        select: {
+            id: true,
+            username: true,
+            avatar: true
+        }
+    }
+};
+
 
 /**
  * Helper: attach watch progress
@@ -89,7 +105,10 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // Base filter
     // -------------------------------
     const whereClause = {
-        isPublished: true
+        isPublished: true,
+        isDeleted: false,
+        processingStatus: "COMPLETED",
+        isHlsReady: true,
     };
 
     // -------------------------------
@@ -124,9 +143,9 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
 
 
 
-    const videos = await prisma.video.findMany({
+    let videos = await prisma.video.findMany({
         where: {
-            isPublished: true,
+            ...whereClause,
             OR: [
                 { ownerId: { in: subscribedChannelIds } },
                 { tags: { some: { tagId: { in: interestedTagIds } } } }
@@ -157,9 +176,10 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
 
     if (videos.length === 0) {
         videos = await prisma.video.findMany({
-            where: { isPublished: true },
+            where: whereClause,
             orderBy: { views: "desc" },
-            take: limit
+            take: limit,
+            select: HOME_FEED_SELECT
         });
     }
 
@@ -251,12 +271,16 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
     // 2️⃣ Build video filter
     const videoWhere = {
         ownerId: { in: channelIds },
+        isDeleted: false,
+        processingStatus: "COMPLETED",
+        isHlsReady: true,
         isPublished: true,
         ...(isShortFilter !== undefined && { isShort: isShortFilter })
     };
 
+
     // 3️⃣ Fetch videos
-    const videos = await prisma.video.findMany({
+    let videos = await prisma.video.findMany({
         where: videoWhere,
         orderBy: { createdAt: "desc" },
         skip,
@@ -336,13 +360,16 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     // --------------------------
     const whereClause = {
         isPublished: true,
+        isDeleted: false,
+        processingStatus: "COMPLETED",
+        isHlsReady: true,
         ...(isShortFilter !== undefined && { isShort: isShortFilter })
     };
 
     // --------------------------
     // Fetch videos
     // --------------------------
-    const videos = await prisma.video.findMany({
+    let videos = await prisma.video.findMany({
         where: whereClause,
         orderBy: [
             { views: "desc" },
@@ -416,7 +443,10 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
     const shorts = await prisma.video.findMany({
         where: {
             isShort: true,
-            isPublished: true
+            isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true
         },
         orderBy: {
             createdAt: "desc"
@@ -447,7 +477,7 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                 }
             },
             likes: userId ? {
-                where: { userId },
+                where: { likedById: userId },
                 select: { id: true }
             } : false,
             comments: {
@@ -486,7 +516,10 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
     const totalShorts = await prisma.video.count({
         where: {
             isShort: true,
-            isPublished: true
+            isPublished: true,
+            isDeleted: false,
+            processingStatus: "COMPLETED",
+            isHlsReady: true
         }
     });
 

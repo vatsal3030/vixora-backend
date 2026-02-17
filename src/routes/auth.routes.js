@@ -7,8 +7,6 @@ import rateLimit from "express-rate-limit";
 
 const router = Router();
 
-
-
 const googleAuthLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 50,

@@ -17,6 +17,9 @@ import ApiResponse from "../utils/ApiResponse.js";
 
 
 export const updateVideoScore = async (videoId) => {
+
+    if (!videoId) return;
+
     const video = await prisma.video.findUnique({
         where: { id: videoId },
         include: {
@@ -25,6 +28,8 @@ export const updateVideoScore = async (videoId) => {
             watchHistory: true
         }
     });
+
+    if (!video) return;
 
     const score =
         video.views * 0.3 +
@@ -93,7 +98,6 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
     })
 
     await updateVideoScore(videoId)
-
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Video liked")
@@ -168,7 +172,6 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized");
     }
 
-    // ✅ Check tweet existence
     const tweet = await prisma.tweet.findUnique({
         where: { id: tweetId },
         select: { id: true },
@@ -178,17 +181,15 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Tweet not found");
     }
 
-    // ✅ Check if like already exists
     const existingLike = await prisma.like.findUnique({
         where: {
             likedById_tweetId: {
-                likedById: req.user.id,
+                likedById: userId,
                 tweetId: tweetId,
             },
         },
     });
 
-    // ✅ Toggle logic
     if (existingLike) {
         await prisma.like.delete({
             where: { id: existingLike.id },
@@ -201,13 +202,10 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
 
     await prisma.like.create({
         data: {
-            likedById: req.user.id,
+            likedById: userId,
             tweetId: tweetId,
         },
     });
-
-    await updateVideoScore(videoId)
-
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Tweet liked")

@@ -4,8 +4,8 @@ import { verifyJwt } from "../middlewares/auth.middleware.js";
 import {
   getProgressForVideos,
   getContinueWatching,
-  getWatchProgress,
-  saveWatchProgress
+  saveWatchProgress,
+  getWatchProgress
 } from "../controllers/watchHistory.controller.js";
 
 const router = Router();
@@ -19,7 +19,7 @@ router.get("/", getContinueWatching);
 // Save / update watch progress
 router.post("/", saveWatchProgress);
 
-// Get progress for a single video
+// // Get progress for a single video
 router.get("/:videoId", getWatchProgress);
 
 // Get progress for multiple videos (bulk)

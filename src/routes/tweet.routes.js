@@ -9,35 +9,23 @@ import {
     getDeletedTweets
 } from "../controllers/tweet.controller.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
-import { upload } from "../middlewares/multer.middleware.js";
 
 const router = Router();
 
 router.use(verifyJwt);
 
-// Create tweet
-router.route("/").post(upload.fields([
-        {
-            name: "tweetImage",
-            maxCount: 1
-        }
-    ]),createTweet);
-
-// Get tweets of a user
+// ---------- STATIC ----------
+router.route("/").post(createTweet);
 router.route("/user/:userId").get(getUserTweets);
+router.route("/trash/me").get(getDeletedTweets);
 
-// Get single tweet
-router.route("/:tweetId").get(getTweetById);
-
-// Update / delete tweet
-router.route("/:tweetId")
-    .patch(updateTweet)
-    .delete(deleteTweet);
-
-// Restore deleted tweet
+// ---------- ACTION ----------
 router.route("/:tweetId/restore").patch(restoreTweet);
 
-// Get deleted tweets (trash)
-router.route("/trash/me").get(getDeletedTweets);
+// ---------- MAIN DYNAMIC LAST ----------
+router.route("/:tweetId")
+    .get(getTweetById)
+    .patch(updateTweet)
+    .delete(deleteTweet);
 
 export default router;

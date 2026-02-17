@@ -128,3 +128,78 @@ export const forgotPasswordOtpTemplate = ({ fullName, otp }) => ({
 });
 
 
+export const emailChangedNotificationTemplate = ({
+  fullName,
+  oldEmail,
+  newEmail,
+  securityContext
+}) => ({
+  subject: "Your Vixora email was changed",
+  html: `
+  <div style="font-family: Arial; max-width:600px; margin:auto;">
+    <h2>Email Changed 📩</h2>
+
+    <p>Hi <strong>${fullName}</strong>,</p>
+
+    <p>Your email was changed successfully.</p>
+
+    <p><strong>Old Email:</strong> ${oldEmail}</p>
+    <p><strong>New Email:</strong> ${newEmail}</p>
+
+    <hr />
+
+    <h3>Security Info</h3>
+    <p><strong>Location:</strong> ${securityContext.location}</p>
+    <p><strong>Device:</strong> ${securityContext.device}</p>
+    <p><strong>Browser:</strong> ${securityContext.browser}</p>
+    <p><strong>IP:</strong> ${securityContext.ip}</p>
+    <p><strong>Time:</strong> ${securityContext.time}</p>
+
+    <hr />
+
+    <p style="color:red;">
+      If this wasn't you, reset password immediately.
+    </p>
+  </div>
+  `
+});
+
+
+export const emailChangeOtpTemplate = ({
+  fullName,
+  otp
+}) => ({
+  subject: "Confirm your new Vixora email",
+  html: `
+  <div style="font-family: Arial, sans-serif; max-width:600px; margin:auto;">
+    <h2>Email Change Verification 🔐</h2>
+
+    <p>Hi <strong>${fullName}</strong>,</p>
+
+    <p>You requested to change your Vixora account email.</p>
+
+    <p>Use this OTP to confirm your new email:</p>
+
+    <div style="
+      margin:20px 0;
+      padding:15px;
+      background:#f4f6f8;
+      text-align:center;
+      font-size:24px;
+      letter-spacing:6px;
+      font-weight:bold;
+    ">
+      ${otp}
+    </div>
+
+    <p>This OTP is valid for <strong>5 minutes</strong>.</p>
+
+    <p>If you didn’t request this change, ignore this email.</p>
+
+    <hr />
+    <p style="font-size:12px;color:#666">
+      © ${new Date().getFullYear()} Vixora
+    </p>
+  </div>
+  `,
+});

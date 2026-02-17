@@ -18,13 +18,17 @@
     "db:seed": "node prisma/seed.js",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "lint": "echo 'Add eslint configuration'",
-    "format": "prettier --write ."
+    "lint": "eslint src --ext .js",
+  "lint:fix": "eslint src --ext .js --fix",
+  "format": "prettier --write .",
+  "test": "jest --runInBand",
+  "test:watch": "jest --watch"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^7.3.0",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.69.2",
     "cloudinary": "^1.41.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -32,7 +36,9 @@
     "ejs": "^3.1.10",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
+    "geoip-lite": "^1.4.10",
     "helmet": "^8.1.0",
+    "ioredis": "^5.9.3",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
@@ -42,6 +48,7 @@
     "passport-google-oauth20": "^2.0.0",
     "pg": "^8.11.3",
     "sib-api-v3-sdk": "^8.5.0",
+    "ua-parser-js": "^2.0.9",
     "zod": "^4.2.1"
   },
   "devDependencies": {
@@ -49,7 +56,11 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "cross-env": "^7.0.3",
+    "eslint": "^10.0.0",
+    "jest": "^30.2.0",
     "nodemon": "^3.0.2",
-    "prisma": "^7.3.0"
+    "prettier": "^3.8.1",
+    "prisma": "^7.3.0",
+    "supertest": "^7.2.2"
   }
 }

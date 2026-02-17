@@ -58,11 +58,16 @@ passport.use(
                 if (googleAvatarUrl) {
                     const uploadedAvatar = await uploadOnCloudinary(
                         googleAvatarUrl,
-                        "vixora/avatars"
+                        {
+                            folder: `avatars/google`,
+                            resource_type: "image"
+                        }
                     );
+
                     avatar = uploadedAvatar?.secure_url || null;
                     avatarPublicId = uploadedAvatar?.public_id || null;
                 }
+
 
                 // 4️⃣ Create Google user
                 user = await prisma.user.create({

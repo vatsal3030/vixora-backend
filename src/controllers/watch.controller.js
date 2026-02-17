@@ -44,14 +44,19 @@ export const watchVideo = asyncHandler(async (req, res) => {
         }
     });
 
-    if (!video || !video.isPublished) {
-        throw new ApiError(404, "Video not found")
+    if (
+        !video ||
+        !video.isPublished ||
+        video.isDeleted ||
+        video.processingStatus !== "COMPLETED" ||
+        !video.isHlsReady
+    ) {
+        throw new ApiError(404, "Video not found");
     }
 
-    // Increment views (simple version)
     await prisma.video.update({
         where: { id: videoId },
-        data: { views: { increment: 1 }, shareCount: { increment: 1 } }
+        data: { views: { increment: 1 } }
     });
 
     await updateVideoScore(videoId)
