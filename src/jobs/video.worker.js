@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redisConnection } from "../queue/redis.connection.js";
+import { getRedisConnection } from "../queue/redis.connection.js";
 import prisma from "../db/prisma.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
 
@@ -8,11 +8,29 @@ const parseBool = (value, defaultValue = false) => {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
 
-const shouldRunWorker = parseBool(process.env.RUN_WORKER, true);
+const shouldRunWorkerDefault = process.env.NODE_ENV !== "production";
+const shouldRunWorker = parseBool(process.env.RUN_WORKER, shouldRunWorkerDefault);
+const shouldRunWorkerOnDemand = parseBool(
+  process.env.RUN_WORKER_ON_DEMAND,
+  process.env.NODE_ENV === "production"
+);
+const workerIdleShutdownMs = Number(process.env.WORKER_IDLE_SHUTDOWN_MS || 45000);
+const shouldAutoShutdown =
+  Number.isFinite(workerIdleShutdownMs) && workerIdleShutdownMs > 0;
 const skipVersionCheck = parseBool(
   process.env.BULLMQ_SKIP_VERSION_CHECK,
   process.env.NODE_ENV === "production"
 );
+
+let workerInstance = null;
+let idleShutdownTimer = null;
+
+const clearIdleShutdownTimer = () => {
+  if (idleShutdownTimer) {
+    clearTimeout(idleShutdownTimer);
+    idleShutdownTimer = null;
+  }
+};
 
 const checkIfCancelled = async (videoId) => {
   const video = await prisma.video.findUnique({
@@ -24,14 +42,7 @@ const checkIfCancelled = async (videoId) => {
   if (video.processingStatus === "CANCELLED") throw new Error("PROCESSING_CANCELLED");
 };
 
-if (!shouldRunWorker) {
-  console.log("Video worker disabled by RUN_WORKER.");
-} else if (!redisConnection) {
-  console.log("Video worker skipped: Redis is not configured.");
-} else {
-  const worker = new Worker(
-    "video-processing",
-    async (job) => {
+const processJob = async (job) => {
       const { videoId } = job.data;
 
       console.log("Background processing started:", videoId);
@@ -119,7 +130,42 @@ if (!shouldRunWorker) {
 
         throw error;
       }
-    },
+    };
+
+const scheduleIdleShutdown = () => {
+  if (!shouldAutoShutdown || !workerInstance || !shouldRunWorkerOnDemand) return;
+
+  clearIdleShutdownTimer();
+  idleShutdownTimer = setTimeout(() => {
+    stopVideoWorker().catch((error) => {
+      console.error("Failed to stop idle worker:", error?.message || error);
+    });
+  }, workerIdleShutdownMs);
+};
+
+export const startVideoWorker = async ({ force = false } = {}) => {
+  if (workerInstance) {
+    return workerInstance;
+  }
+
+  const canStart = force
+    ? shouldRunWorkerOnDemand || shouldRunWorker
+    : shouldRunWorker;
+
+  if (!canStart) {
+    return null;
+  }
+
+  const redisConnection = getRedisConnection();
+
+  if (!redisConnection) {
+    console.log("Video worker skipped: Redis is not configured.");
+    return null;
+  }
+
+  workerInstance = new Worker(
+    "video-processing",
+    processJob,
     {
       connection: redisConnection,
       concurrency: 2,
@@ -127,9 +173,48 @@ if (!shouldRunWorker) {
     }
   );
 
-  worker.on("error", (err) => {
+  workerInstance.on("error", (err) => {
     console.error("Video worker runtime error:", err?.message || err);
   });
 
+  workerInstance.on("active", () => {
+    clearIdleShutdownTimer();
+  });
+
+  workerInstance.on("drained", () => {
+    scheduleIdleShutdown();
+  });
+
+  workerInstance.on("closed", () => {
+    clearIdleShutdownTimer();
+    workerInstance = null;
+  });
+
   console.log("Cloudinary background worker started.");
+
+  return workerInstance;
+};
+
+export const stopVideoWorker = async () => {
+  clearIdleShutdownTimer();
+
+  if (!workerInstance) {
+    return;
+  }
+
+  const closingWorker = workerInstance;
+  workerInstance = null;
+
+  await closingWorker.close();
+  console.log("Cloudinary background worker stopped after idle timeout.");
+};
+
+if (shouldRunWorker) {
+  startVideoWorker().catch((error) => {
+    console.error("Video worker bootstrap failed:", error?.message || error);
+  });
+} else if (shouldRunWorkerOnDemand) {
+  console.log("Video worker on-demand mode is enabled.");
+} else {
+  console.log("Video worker disabled by RUN_WORKER.");
 }

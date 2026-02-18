@@ -12,7 +12,10 @@ const parseBool = (value, defaultValue = false) => {
 async function startServer() {
   try {
     const shouldRunScheduler = parseBool(process.env.RUN_SCHEDULER, true);
-    const shouldRunWorker = parseBool(process.env.RUN_WORKER, true);
+    const shouldRunWorker = parseBool(
+      process.env.RUN_WORKER,
+      process.env.NODE_ENV !== "production"
+    );
 
     if (shouldRunScheduler) {
       await import("./jobs/scheduler.js");

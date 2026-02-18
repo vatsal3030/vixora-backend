@@ -1,18 +1,41 @@
 import { Queue } from "bullmq";
-import { redisConnection } from "./redis.connection.js";
+import { getRedisConnection } from "./redis.connection.js";
 
 const parseBool = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
 
+const shouldRunWorker = parseBool(
+  process.env.RUN_WORKER,
+  process.env.NODE_ENV !== "production"
+);
+const shouldRunWorkerOnDemand = parseBool(
+  process.env.RUN_WORKER_ON_DEMAND,
+  process.env.NODE_ENV === "production"
+);
+const shouldUseQueue = shouldRunWorker || shouldRunWorkerOnDemand;
+
 const skipVersionCheck = parseBool(
   process.env.BULLMQ_SKIP_VERSION_CHECK,
   process.env.NODE_ENV === "production"
 );
 
-export const videoQueue = redisConnection
-  ? new Queue("video-processing", {
+let videoQueue = null;
+
+export const getVideoQueue = () => {
+  if (!shouldUseQueue) {
+    return null;
+  }
+
+  const redisConnection = getRedisConnection();
+
+  if (!redisConnection) {
+    return null;
+  }
+
+  if (!videoQueue) {
+    videoQueue = new Queue("video-processing", {
       connection: redisConnection,
       skipVersionCheck,
       defaultJobOptions: {
@@ -24,5 +47,8 @@ export const videoQueue = redisConnection
         removeOnComplete: 100,
         removeOnFail: 500,
       },
-    })
-  : null;
+    });
+  }
+
+  return videoQueue;
+};

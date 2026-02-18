@@ -29,6 +29,15 @@ const redisPassword = cleanEnv(process.env.REDIS_PASSWORD) || undefined;
 
 const hasRedisConfig = Boolean(redisUrl || redisHost);
 const isRedisEnabled = parseBool(process.env.REDIS_ENABLED, false);
+const shouldRunWorker = parseBool(
+  process.env.RUN_WORKER,
+  cleanEnv(process.env.NODE_ENV) !== "production"
+);
+const shouldRunWorkerOnDemand = parseBool(
+  process.env.RUN_WORKER_ON_DEMAND,
+  cleanEnv(process.env.NODE_ENV) === "production"
+);
+const shouldUseRedisQueue = shouldRunWorker || shouldRunWorkerOnDemand;
 
 const baseOptions = {
   maxRetriesPerRequest: null,
@@ -43,40 +52,64 @@ const baseOptions = {
 };
 
 let redisConnection = null;
+let initialized = false;
 
-if (!isRedisEnabled) {
-  if (hasRedisConfig) {
-    console.warn("Redis config found but REDIS_ENABLED is false. Redis will stay disabled.");
-  }
-  console.warn("Redis disabled (REDIS_ENABLED=false or no Redis config).");
-} else if (redisUrl) {
-  redisConnection = new Redis(redisUrl, baseOptions);
-} else if (redisHost) {
-  redisConnection = new Redis({
-    host: redisHost,
-    port: redisPort,
-    password: redisPassword,
-    ...baseOptions,
-  });
-} else {
-  console.warn("Redis enabled but configuration is missing. Redis will stay disabled.");
-}
-
-if (redisConnection) {
+const attachRedisListeners = (connection) => {
   let lastErrorLogAt = 0;
   const ERROR_LOG_COOLDOWN_MS = 30000;
 
-  redisConnection.on("connect", () => {
+  connection.on("connect", () => {
     console.log("Redis connected");
   });
 
-  redisConnection.on("error", (err) => {
+  connection.on("error", (err) => {
     const now = Date.now();
     if (now - lastErrorLogAt >= ERROR_LOG_COOLDOWN_MS) {
       lastErrorLogAt = now;
       console.error("Redis error:", err?.message || err);
     }
   });
-}
+};
 
-export { redisConnection, isRedisEnabled };
+export const getRedisConnection = () => {
+  if (initialized) {
+    return redisConnection;
+  }
+
+  initialized = true;
+
+  if (!isRedisEnabled) {
+    if (hasRedisConfig) {
+      console.warn("Redis config found but REDIS_ENABLED is false. Redis will stay disabled.");
+    }
+    console.warn("Redis disabled (REDIS_ENABLED=false or no Redis config).");
+    return null;
+  }
+
+  if (!shouldUseRedisQueue) {
+    console.warn("Redis connection skipped because worker modes are disabled.");
+    return null;
+  }
+
+  if (redisUrl) {
+    redisConnection = new Redis(redisUrl, baseOptions);
+    attachRedisListeners(redisConnection);
+    return redisConnection;
+  }
+
+  if (redisHost) {
+    redisConnection = new Redis({
+      host: redisHost,
+      port: redisPort,
+      password: redisPassword,
+      ...baseOptions,
+    });
+    attachRedisListeners(redisConnection);
+    return redisConnection;
+  }
+
+  console.warn("Redis enabled but configuration is missing. Redis will stay disabled.");
+  return null;
+};
+
+export { isRedisEnabled };

@@ -2,7 +2,7 @@ import prisma from "../db/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
-import { videoQueue } from "../queue/video.queue.js";
+import { getVideoQueue } from "../queue/video.queue.js";
 
 
 export const getVideoProcessingStatus = asyncHandler(async (req, res) => {
@@ -33,6 +33,7 @@ export const getVideoProcessingStatus = asyncHandler(async (req, res) => {
 
 export const cancelVideoProcessing = asyncHandler(async (req, res) => {
   const { videoId } = req.params;
+  const videoQueue = getVideoQueue();
 
   const video = await prisma.video.findUnique({
     where: { id: videoId },
