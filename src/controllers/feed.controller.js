@@ -2,6 +2,7 @@ import prisma from "../db/prisma.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import ApiError from "../utils/ApiError.js";
+import { getCachedValue, setCachedValue } from "../utils/cache.js";
 
 const HOME_FEED_SELECT = {
     id: true,
@@ -18,6 +19,20 @@ const HOME_FEED_SELECT = {
         }
     }
 };
+
+const HOME_CACHE_TTL_SECONDS = 20;
+const SUBSCRIPTIONS_CACHE_TTL_SECONDS = 20;
+const TRENDING_CACHE_TTL_SECONDS = 45;
+const MAX_CACHEABLE_PAGE = 3;
+const MAX_CACHEABLE_LIMIT = 20;
+
+const isCacheableWindow = (page, limit) =>
+    Number.isFinite(page) &&
+    Number.isFinite(limit) &&
+    page >= 1 &&
+    page <= MAX_CACHEABLE_PAGE &&
+    limit >= 1 &&
+    limit <= MAX_CACHEABLE_LIMIT;
 
 
 /**
@@ -100,6 +115,24 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     }
 
     sortType = sortType === "asc" ? "asc" : "desc";
+
+    const shouldUseCache = Boolean(userId) && isCacheableWindow(page, limit);
+    const cacheParams = shouldUseCache
+        ? { userId, page, limit, sortBy, sortType }
+        : null;
+
+    if (cacheParams) {
+        const cached = await getCachedValue({
+            scope: "feed:home",
+            params: cacheParams,
+        });
+
+        if (cached.hit && cached.value) {
+            return res.status(200).json(
+                new ApiResponse(200, cached.value.data, cached.value.message)
+            );
+        }
+    }
 
     // -------------------------------
     // Base filter
@@ -196,19 +229,28 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
         where: whereClause
     });
 
+    const responseData = {
+        videos: videosWithProgress,
+        pagination: {
+            currentPage: page,
+            totalPages: Math.ceil(totalVideos / limit),
+            totalVideos
+        }
+    };
+
+    const responseMessage = "Home feed fetched successfully";
+
+    if (cacheParams) {
+        await setCachedValue({
+            scope: "feed:home",
+            params: cacheParams,
+            value: { data: responseData, message: responseMessage },
+            ttlSeconds: HOME_CACHE_TTL_SECONDS,
+        });
+    }
+
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                videos: videosWithProgress,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
-                }
-            },
-            "Home feed fetched successfully"
-        )
+        new ApiResponse(200, responseData, responseMessage)
     );
 });
 
@@ -243,6 +285,24 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
             isShort === "false" ? false :
                 undefined;
 
+    const shouldUseCache = isCacheableWindow(page, limit);
+    const cacheParams = shouldUseCache
+        ? { userId, page, limit, isShort: isShortFilter ?? "all" }
+        : null;
+
+    if (cacheParams) {
+        const cached = await getCachedValue({
+            scope: "feed:subscriptions",
+            params: cacheParams,
+        });
+
+        if (cached.hit && cached.value) {
+            return res.status(200).json(
+                new ApiResponse(200, cached.value.data, cached.value.message)
+            );
+        }
+    }
+
     // 1️⃣ Get subscribed channels
     const subscriptions = await prisma.subscription.findMany({
         where: { subscriberId: userId },
@@ -250,19 +310,26 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
     });
 
     if (!subscriptions.length) {
+        const emptyData = {
+            videos: [],
+            pagination: {
+                currentPage: page,
+                totalPages: 0,
+                totalVideos: 0
+            }
+        };
+
+        if (cacheParams) {
+            await setCachedValue({
+                scope: "feed:subscriptions",
+                params: cacheParams,
+                value: { data: emptyData, message: "No subscriptions found" },
+                ttlSeconds: SUBSCRIPTIONS_CACHE_TTL_SECONDS,
+            });
+        }
+
         return res.status(200).json(
-            new ApiResponse(
-                200,
-                {
-                    videos: [],
-                    pagination: {
-                        currentPage: page,
-                        totalPages: 0,
-                        totalVideos: 0
-                    }
-                },
-                "No subscriptions found"
-            )
+            new ApiResponse(200, emptyData, "No subscriptions found")
         );
     }
 
@@ -310,19 +377,28 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         where: videoWhere
     });
 
+    const responseData = {
+        videos: videosWithProgress,
+        pagination: {
+            currentPage: page,
+            totalPages: Math.ceil(totalVideos / limit),
+            totalVideos
+        }
+    };
+
+    const responseMessage = "Subscription feed fetched successfully";
+
+    if (cacheParams) {
+        await setCachedValue({
+            scope: "feed:subscriptions",
+            params: cacheParams,
+            value: { data: responseData, message: responseMessage },
+            ttlSeconds: SUBSCRIPTIONS_CACHE_TTL_SECONDS,
+        });
+    }
+
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                videos: videosWithProgress,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
-                }
-            },
-            "Subscription feed fetched successfully"
-        )
+        new ApiResponse(200, responseData, responseMessage)
     );
 });
 
@@ -354,6 +430,24 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
         isShort === "true" ? true :
             isShort === "false" ? false :
                 undefined;
+
+    const shouldUseCache = isCacheableWindow(page, limit);
+    const cacheParams = shouldUseCache
+        ? { page, limit, isShort: isShortFilter ?? "all" }
+        : null;
+
+    if (cacheParams) {
+        const cached = await getCachedValue({
+            scope: "feed:trending",
+            params: cacheParams,
+        });
+
+        if (cached.hit && cached.value) {
+            return res.status(200).json(
+                new ApiResponse(200, cached.value.data, cached.value.message)
+            );
+        }
+    }
 
     // --------------------------
     // Where clause
@@ -402,19 +496,28 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
         where: whereClause
     });
 
+    const responseData = {
+        videos,
+        pagination: {
+            currentPage: page,
+            totalPages: Math.ceil(totalVideos / limit),
+            totalVideos
+        }
+    };
+
+    const responseMessage = "Trending feed fetched successfully";
+
+    if (cacheParams) {
+        await setCachedValue({
+            scope: "feed:trending",
+            params: cacheParams,
+            value: { data: responseData, message: responseMessage },
+            ttlSeconds: TRENDING_CACHE_TTL_SECONDS,
+        });
+    }
+
     return res.status(200).json(
-        new ApiResponse(
-            200,
-            {
-                videos,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
-                }
-            },
-            "Trending feed fetched successfully"
-        )
+        new ApiResponse(200, responseData, responseMessage)
     );
 });
 

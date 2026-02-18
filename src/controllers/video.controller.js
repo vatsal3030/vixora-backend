@@ -4,6 +4,9 @@ import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import uploadOnCloudinary, { deleteImageOnCloudinary, deleteVideoOnCloudinary } from "../utils/cloudinary.js"
 import { enqueueVideoProcessing } from "../queue/video.producer.js";
+import { getCachedValue, setCachedValue } from "../utils/cache.js";
+
+const VIDEO_DETAIL_CACHE_TTL_SECONDS = 20;
 
 
 export const updateVideoScore = async (videoId) => {
@@ -235,6 +238,31 @@ export const getVideoById = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Video ID is required");
     }
 
+    const cacheParams = {
+        videoId,
+        viewerId: userId || "anonymous",
+    };
+
+    const cached = await getCachedValue({
+        scope: "video:detail",
+        params: cacheParams,
+    });
+
+    if (cached.hit && cached.value?.data) {
+        const cachedVideo = cached.value.data;
+
+        if (cachedVideo?.owner?.id && cachedVideo.owner.id !== userId) {
+            await prisma.video.update({
+                where: { id: videoId },
+                data: { views: { increment: 1 } }
+            }).catch(() => null);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, cachedVideo, cached.value.message || "Video fetched successfully")
+        );
+    }
+
     const video = await prisma.video.findUnique({
         where: { id: videoId },
         select: {
@@ -343,8 +371,17 @@ export const getVideoById = asyncHandler(async (req, res) => {
     };
 
 
+    const responseMessage = "Video fetched successfully";
+
+    await setCachedValue({
+        scope: "video:detail",
+        params: cacheParams,
+        value: { data: formattedVideo, message: responseMessage },
+        ttlSeconds: VIDEO_DETAIL_CACHE_TTL_SECONDS,
+    });
+
     return res.status(200).json(
-        new ApiResponse(200, formattedVideo, "Video fetched successfully")
+        new ApiResponse(200, formattedVideo, responseMessage)
     );
 });
 

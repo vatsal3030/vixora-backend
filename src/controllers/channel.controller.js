@@ -2,10 +2,29 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
+import { getCachedValue, setCachedValue } from "../utils/cache.js";
+
+const CHANNEL_INFO_CACHE_TTL_SECONDS = 30;
 
 export const getChannelInfo = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
     const userId = req.user?.id;
+
+    const cacheParams = {
+        channelId,
+        viewerId: userId || "anonymous",
+    };
+
+    const cached = await getCachedValue({
+        scope: "channel:info",
+        params: cacheParams,
+    });
+
+    if (cached.hit && cached.value) {
+        return res.status(200).json(
+            new ApiResponse(200, cached.value.data, cached.value.message)
+        );
+    }
 
     const channel = await prisma.user.findUnique({
         where: { id: channelId },
@@ -44,20 +63,31 @@ export const getChannelInfo = asyncHandler(async (req, res) => {
         isSubscribed = !!subscription;
     }
 
+    const responseData = {
+        id: channel.id,
+        username: channel.username,
+        avatar: channel.avatar,
+        coverImage: channel.coverImage,
+        description: channel.channelDescription,
+        category: null,
+        links: channel.channelLinks,
+        subscribersCount: channel._count.subscribers,
+        videosCount: channel._count.videos,
+        joinedAt: channel.createdAt,
+        isSubscribed
+    };
+
+    const responseMessage = "Channel info fetched";
+
+    await setCachedValue({
+        scope: "channel:info",
+        params: cacheParams,
+        value: { data: responseData, message: responseMessage },
+        ttlSeconds: CHANNEL_INFO_CACHE_TTL_SECONDS,
+    });
+
     return res.status(200).json(
-        new ApiResponse(200, {
-            id: channel.id,
-            username: channel.username,
-            avatar: channel.avatar,
-            coverImage: channel.coverImage,
-            description: channel.channelDescription,
-            category: null,
-            links: channel.channelLinks,
-            subscribersCount: channel._count.subscribers,
-            videosCount: channel._count.videos,
-            joinedAt: channel.createdAt,
-            isSubscribed
-        }, "Channel info fetched")
+        new ApiResponse(200, responseData, responseMessage)
     );
 });
 

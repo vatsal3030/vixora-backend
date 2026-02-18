@@ -1,5 +1,9 @@
 import { Worker } from "bullmq";
-import { getRedisConnection } from "../queue/redis.connection.js";
+import {
+  closeRedisConnection,
+  getRedisConnection,
+} from "../queue/redis.connection.js";
+import { closeVideoQueue } from "../queue/video.queue.js";
 import prisma from "../db/prisma.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
 
@@ -206,6 +210,10 @@ export const stopVideoWorker = async () => {
   workerInstance = null;
 
   await closingWorker.close();
+
+  await closeVideoQueue();
+  await closeRedisConnection();
+
   console.log("Cloudinary background worker stopped after idle timeout.");
 };
 

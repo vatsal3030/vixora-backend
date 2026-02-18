@@ -52,3 +52,15 @@ export const getVideoQueue = () => {
 
   return videoQueue;
 };
+
+export const closeVideoQueue = async () => {
+  if (!videoQueue) {
+    return;
+  }
+
+  const queueToClose = videoQueue;
+  videoQueue = null;
+
+  await queueToClose.close();
+  console.log("Video queue closed.");
+};

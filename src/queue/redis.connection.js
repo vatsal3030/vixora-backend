@@ -29,6 +29,7 @@ const redisPassword = cleanEnv(process.env.REDIS_PASSWORD) || undefined;
 
 const hasRedisConfig = Boolean(redisUrl || redisHost);
 const isRedisEnabled = parseBool(process.env.REDIS_ENABLED, false);
+const isCacheEnabled = parseBool(process.env.CACHE_ENABLED, false);
 const shouldRunWorker = parseBool(
   process.env.RUN_WORKER,
   cleanEnv(process.env.NODE_ENV) !== "production"
@@ -38,6 +39,7 @@ const shouldRunWorkerOnDemand = parseBool(
   cleanEnv(process.env.NODE_ENV) === "production"
 );
 const shouldUseRedisQueue = shouldRunWorker || shouldRunWorkerOnDemand;
+const shouldUseRedis = shouldUseRedisQueue || isCacheEnabled;
 
 const baseOptions = {
   maxRetriesPerRequest: null,
@@ -86,8 +88,8 @@ export const getRedisConnection = () => {
     return null;
   }
 
-  if (!shouldUseRedisQueue) {
-    console.warn("Redis connection skipped because worker modes are disabled.");
+  if (!shouldUseRedis) {
+    console.warn("Redis connection skipped because queue + cache modes are disabled.");
     return null;
   }
 
@@ -112,4 +114,23 @@ export const getRedisConnection = () => {
   return null;
 };
 
-export { isRedisEnabled };
+export const closeRedisConnection = async () => {
+  if (!redisConnection) {
+    initialized = false;
+    return;
+  }
+
+  const connectionToClose = redisConnection;
+  redisConnection = null;
+  initialized = false;
+
+  try {
+    await connectionToClose.quit();
+  } catch {
+    connectionToClose.disconnect();
+  }
+
+  console.log("Redis connection closed.");
+};
+
+export { isRedisEnabled, isCacheEnabled };
