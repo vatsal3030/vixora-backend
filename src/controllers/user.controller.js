@@ -555,11 +555,11 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
 export const forgotPasswordRequest = asyncHandler(async (req, res) => {
     const { email } = req.body;
 
-    const normalizedEmail = email.toLowerCase().trim()
-
     if (!email?.trim()) {
         throw new ApiError(400, "Email is required");
     }
+
+    const normalizedEmail = email.toLowerCase().trim()
 
     const user = await prisma.user.findUnique({
         where: { email: normalizedEmail },

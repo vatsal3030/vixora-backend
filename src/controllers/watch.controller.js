@@ -13,6 +13,8 @@ export const updateVideoScore = async (videoId) => {
         }
     });
 
+    if (!video) return;
+
     const score =
         video.views * 0.3 +
         video.likes.length * 0.4 +

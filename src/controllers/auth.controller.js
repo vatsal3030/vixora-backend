@@ -6,6 +6,7 @@ import {
     generateRefreshToken,
 } from "../utils/jwt.js";
 import prisma from "../db/prisma.js";
+import { isGoogleOAuthConfigured } from "../config/passport.js";
 
 /*
   STEP 1: Redirect user to Google
@@ -13,6 +14,9 @@ import prisma from "../db/prisma.js";
 import crypto from "crypto";
 
 export const googleAuth = asyncHandler(async (req, res, next) => {
+    if (!isGoogleOAuthConfigured) {
+        throw new ApiError(503, "Google OAuth is not configured");
+    }
 
     const state = crypto.randomBytes(16).toString("hex");
 
@@ -34,6 +38,9 @@ export const googleAuth = asyncHandler(async (req, res, next) => {
   STEP 2: Google callback
 */
 export const googleAuthCallback = asyncHandler(async (req, res, next) => {
+    if (!isGoogleOAuthConfigured) {
+        throw new ApiError(503, "Google OAuth is not configured");
+    }
 
     const frontend = process.env.FRONTEND_URL;
     if (!frontend) throw new ApiError(500, "FRONTEND_URL missing");
