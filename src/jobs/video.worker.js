@@ -9,6 +9,10 @@ const parseBool = (value, defaultValue = false) => {
 };
 
 const shouldRunWorker = parseBool(process.env.RUN_WORKER, true);
+const skipVersionCheck = parseBool(
+  process.env.BULLMQ_SKIP_VERSION_CHECK,
+  process.env.NODE_ENV === "production"
+);
 
 const checkIfCancelled = async (videoId) => {
   const video = await prisma.video.findUnique({
@@ -119,6 +123,7 @@ if (!shouldRunWorker) {
     {
       connection: redisConnection,
       concurrency: 2,
+      skipVersionCheck,
     }
   );
 

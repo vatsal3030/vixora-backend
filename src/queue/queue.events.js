@@ -1,18 +1,33 @@
 import { QueueEvents } from "bullmq";
 import { redisConnection } from "./redis.connection.js";
 
-export const videoQueueEvents = new QueueEvents("video-processing", {
-  connection: redisConnection,
-});
+const parseBool = (value, defaultValue = false) => {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+};
 
-videoQueueEvents.on("completed", ({ jobId }) => {
-  console.log("✅ Job completed:", jobId);
-});
+const skipVersionCheck = parseBool(
+  process.env.BULLMQ_SKIP_VERSION_CHECK,
+  process.env.NODE_ENV === "production"
+);
 
-videoQueueEvents.on("failed", ({ jobId, failedReason }) => {
-  console.error("❌ Job failed:", jobId, failedReason);
-});
+export const videoQueueEvents = redisConnection
+  ? new QueueEvents("video-processing", {
+      connection: redisConnection,
+      skipVersionCheck,
+    })
+  : null;
 
-videoQueueEvents.on("waiting", ({ jobId }) => {
-  console.log("⏳ Job waiting:", jobId);
-});
+if (videoQueueEvents) {
+  videoQueueEvents.on("completed", ({ jobId }) => {
+    console.log("Job completed:", jobId);
+  });
+
+  videoQueueEvents.on("failed", ({ jobId, failedReason }) => {
+    console.error("Job failed:", jobId, failedReason);
+  });
+
+  videoQueueEvents.on("waiting", ({ jobId }) => {
+    console.log("Job waiting:", jobId);
+  });
+}
