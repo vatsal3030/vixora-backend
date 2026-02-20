@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { verifyJwt } from "../middlewares/auth.middleware.js";
+import { optionalJwt, verifyJwt } from "../middlewares/auth.middleware.js";
 import {
   getHomeFeed,
   getSubscriptionsFeed,
@@ -11,7 +11,7 @@ const router = Router();
 
 router.get("/home", verifyJwt, getHomeFeed);
 router.get("/subscriptions", verifyJwt, getSubscriptionsFeed);
-router.get("/trending", getTrendingFeed);
-router.get("/shorts", getShortsFeed);
+router.get("/trending", optionalJwt, getTrendingFeed);
+router.get("/shorts", optionalJwt, getShortsFeed);
 
 export default router;

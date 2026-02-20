@@ -2,6 +2,10 @@ import asyncHandler from "../utils/asyncHandler.js"
 import prisma from "../db/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
+import { sanitizePagination } from "../utils/pagination.js";
+import { buildPaginatedListData } from "../utils/listResponse.js";
+
+const NOTIFICATION_LEVELS = new Set(["ALL", "PERSONALIZED", "NONE"]);
 
 export const updateChannelVideoScores = async (channelId) => {
 
@@ -20,7 +24,7 @@ export const updateChannelVideoScores = async (channelId) => {
 
         const [likesCount, commentsCount, watchCount] = await Promise.all([
             prisma.like.count({ where: { videoId: video.id } }),
-            prisma.comment.count({ where: { videoId: video.id } }),
+            prisma.comment.count({ where: { videoId: video.id, isDeleted: false } }),
             prisma.watchHistory.count({ where: { videoId: video.id } })
         ]);
 
@@ -59,10 +63,10 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
 
     const channel = await prisma.user.findUnique({
         where: { id: channelId },
-        select: { id: true },
+        select: { id: true, isDeleted: true },
     });
 
-    if (!channel) {
+    if (!channel || channel.isDeleted) {
         throw new ApiError(404, "Channel not found");
     }
 
@@ -100,8 +104,8 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
         },
     });
 
-    // 🔥 IMPORTANT: update all video scores of that channel
-    await updateChannelVideoScores(channelId);
+    // Run score refresh in background to avoid blocking subscription response latency.
+    void updateChannelVideoScores(channelId).catch(() => null);
 
     const subscriberCount = await prisma.subscription.count({
         where: { channelId },
@@ -148,13 +152,23 @@ export const getSubscriberCount = asyncHandler(async (req, res) => {
 // controller to return channel list to which user has subscribed
 export const getSubscribedChannels = asyncHandler(async (req, res) => {
     const subscriberId = req.user?.id;
+    const { page = "1", limit = "20" } = req.query;
 
     if (!subscriberId) {
         throw new ApiError(401, "Unauthorized");
     }
 
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+
     const subscriptions = await prisma.subscription.findMany({
-        where: { subscriberId },
+        where: {
+            subscriberId,
+            channel: {
+                isDeleted: false
+            }
+        },
+        skip,
+        take: safeLimit,
         select: {
             channel: {
                 select: {
@@ -174,6 +188,15 @@ export const getSubscribedChannels = asyncHandler(async (req, res) => {
         orderBy: { createdAt: "desc" },
     });
 
+    const totalChannels = await prisma.subscription.count({
+        where: {
+            subscriberId,
+            channel: {
+                isDeleted: false
+            }
+        },
+    });
+
     const channelList = subscriptions.map(sub => ({
         ...sub.channel,
         subscribersCount: sub.channel._count.subscribers,
@@ -184,7 +207,14 @@ export const getSubscribedChannels = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            channelList,
+            buildPaginatedListData({
+                key: "channels",
+                items: channelList,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalChannels,
+                legacyTotalKey: "totalChannels",
+            }),
             "Subscribed channels fetched successfully"
         )
     );
@@ -199,13 +229,7 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
 
     let { page = "1", limit = "10" } = req.query;
 
-    page = Number(page);
-    limit = Number(limit);
-
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
-
-    const skip = (page - 1) * limit;
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
 
     // 1️⃣ Get all subscribed channels
     const subscriptions = await prisma.subscription.findMany({
@@ -217,14 +241,18 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
 
     if (channelIds.length === 0) {
         return res.status(200).json(
-            new ApiResponse(200, {
-                videos: [],
-                pagination: {
-                    currentPage: page,
-                    totalPages: 0,
-                    totalVideos: 0
-                }
-            }, "No subscribed channels")
+            new ApiResponse(
+                200,
+                buildPaginatedListData({
+                    key: "videos",
+                    items: [],
+                    currentPage: safePage,
+                    limit: safeLimit,
+                    totalItems: 0,
+                    legacyTotalKey: "totalVideos",
+                }),
+                "No subscribed channels"
+            )
         );
     }
 
@@ -241,7 +269,7 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
             createdAt: "desc"
         },
         skip,
-        take: limit,
+        take: safeLimit,
         select: {
             id: true,
             title: true,
@@ -272,14 +300,14 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                videos,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
-                }
-            },
+            buildPaginatedListData({
+                key: "videos",
+                items: videos,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalVideos,
+                legacyTotalKey: "totalVideos",
+            }),
             "Subscribed videos fetched successfully"
         )
     );
@@ -287,7 +315,7 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
 
 export const setNotificationLevel = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
-    const { level } = req.body;
+    const level = String(req.body?.level || "").trim().toUpperCase();
     const userId = req.user.id;
 
     if (!channelId) {
@@ -296,6 +324,10 @@ export const setNotificationLevel = asyncHandler(async (req, res) => {
 
     if (!level) {
         throw new ApiError(400, "Notification level is required");
+    }
+
+    if (!NOTIFICATION_LEVELS.has(level)) {
+        throw new ApiError(400, "Invalid notification level");
     }
 
     // Find the subscription of logged-in user to that channel
@@ -340,10 +372,12 @@ export const getSubscriptionStatus = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Channel ID is required");
     }
 
-    const subscription = await prisma.subscription.findFirst({
+    const subscription = await prisma.subscription.findUnique({
         where: {
-            subscriberId: userId,
-            channelId
+            subscriberId_channelId: {
+                subscriberId: userId,
+                channelId
+            }
         },
         select: {
             id: true,

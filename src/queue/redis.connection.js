@@ -40,6 +40,22 @@ const shouldRunWorkerOnDemand = parseBool(
 );
 const shouldUseRedisQueue = shouldRunWorker || shouldRunWorkerOnDemand;
 const shouldUseRedis = shouldUseRedisQueue || isCacheEnabled;
+const REDIS_ERROR_LOG_COOLDOWN_MS = Number(process.env.REDIS_ERROR_LOG_COOLDOWN_MS || 30000);
+
+export const isTransientRedisError = (err) => {
+  const code = String(err?.code || "").toUpperCase();
+  const message = String(err?.message || "").toLowerCase();
+
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "EPIPE") {
+    return true;
+  }
+
+  return (
+    message.includes("read econnreset") ||
+    message.includes("socket hang up") ||
+    message.includes("connection reset")
+  );
+};
 
 const baseOptions = {
   maxRetriesPerRequest: null,
@@ -55,22 +71,45 @@ const baseOptions = {
 
 let redisConnection = null;
 let initialized = false;
+const attachedConnections = new WeakSet();
 
 const attachRedisListeners = (connection) => {
+  if (!connection || attachedConnections.has(connection)) {
+    return;
+  }
+  attachedConnections.add(connection);
+
   let lastErrorLogAt = 0;
-  const ERROR_LOG_COOLDOWN_MS = 30000;
 
   connection.on("connect", () => {
     console.log("Redis connected");
   });
 
+  connection.on("reconnecting", () => {
+    console.warn("Redis reconnecting...");
+  });
+
   connection.on("error", (err) => {
     const now = Date.now();
-    if (now - lastErrorLogAt >= ERROR_LOG_COOLDOWN_MS) {
+    if (now - lastErrorLogAt >= REDIS_ERROR_LOG_COOLDOWN_MS) {
       lastErrorLogAt = now;
-      console.error("Redis error:", err?.message || err);
+      const message = err?.message || String(err);
+      if (isTransientRedisError(err)) {
+        console.warn("Redis transient error:", message);
+      } else {
+        console.error("Redis error:", message);
+      }
     }
   });
+
+  if (typeof connection.duplicate === "function") {
+    const originalDuplicate = connection.duplicate.bind(connection);
+    connection.duplicate = (...args) => {
+      const duplicated = originalDuplicate(...args);
+      attachRedisListeners(duplicated);
+      return duplicated;
+    };
+  }
 };
 
 export const getRedisConnection = () => {

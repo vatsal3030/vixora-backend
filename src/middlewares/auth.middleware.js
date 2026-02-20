@@ -77,3 +77,35 @@ export const verifyJwt = asyncHandler(async (req, res, next) => {
         });
     }
 });
+
+export const optionalJwt = asyncHandler(async (req, res, next) => {
+    const token =
+        req.cookies?.accessToken ||
+        req.header("Authorization")?.replace("Bearer ", "");
+
+    if (!token) {
+        return next();
+    }
+
+    try {
+        const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+
+        if (!decodedToken?.id || typeof decodedToken.id !== "string") {
+            return next();
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { id: decodedToken.id },
+            select: userSafeSelect,
+        });
+
+        if (!user || user.isDeleted) {
+            return next();
+        }
+
+        req.user = user;
+        return next();
+    } catch {
+        return next();
+    }
+});

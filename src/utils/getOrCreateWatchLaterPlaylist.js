@@ -1,10 +1,15 @@
 import prisma from "../db/prisma.js";
 
+const WATCH_LATER_NAME = "Watch Later";
+
 export const getOrCreateWatchLater = async (userId) => {
   const playlist = await prisma.playlist.findFirst({
     where: {
       ownerId: userId,
-      name: "Watch Later",
+      name: {
+        equals: WATCH_LATER_NAME,
+        mode: "insensitive",
+      },
       isDeleted: false,
     },
     select: { id: true },
@@ -14,9 +19,10 @@ export const getOrCreateWatchLater = async (userId) => {
 
   const created = await prisma.playlist.create({
     data: {
-      name: "Watch Later",
+      name: WATCH_LATER_NAME,
       description: "Videos saved to watch later",
-      isPublic: false, // 🔒 ALWAYS PRIVATE
+      isPublic: false,
+      isSystem: true,
       ownerId: userId,
     },
     select: { id: true },
@@ -24,3 +30,4 @@ export const getOrCreateWatchLater = async (userId) => {
 
   return created.id;
 };
+

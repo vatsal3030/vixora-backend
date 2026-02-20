@@ -1,4 +1,6 @@
 export default {
   testEnvironment: "node",
-  verbose: true
+  verbose: true,
+  transform: {},
+  testMatch: ["**/tests/**/*.test.js"]
 };

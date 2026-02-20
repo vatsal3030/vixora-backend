@@ -2,11 +2,25 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
-import uploadOnCloudinary, { deleteImageOnCloudinary, deleteVideoOnCloudinary } from "../utils/cloudinary.js"
-import { enqueueVideoProcessing } from "../queue/video.producer.js";
 import { getCachedValue, setCachedValue } from "../utils/cache.js";
+import { buildPaginatedListData } from "../utils/listResponse.js";
+import {
+    ChannelNotificationAudience,
+    dispatchChannelActivityNotification,
+} from "../services/notification.service.js";
 
 const VIDEO_DETAIL_CACHE_TTL_SECONDS = 20;
+const MAX_VIDEO_TITLE_LENGTH = 120;
+const MAX_VIDEO_DESCRIPTION_LENGTH = 5000;
+
+const dispatchNotificationInBackground = (payload) => {
+    void dispatchChannelActivityNotification(payload).catch((error) => {
+        console.error(
+            "Notification dispatch failed:",
+            error?.message || error
+        );
+    });
+};
 
 
 export const updateVideoScore = async (videoId) => {
@@ -117,7 +131,8 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                     thumbnail: true,
                     views: true,
                     duration: true,
-                    createdAt: true,
+            isPublished: true,
+            createdAt: true,
                     playbackUrl: true,
                     availableQualities: true,
                     processingStatus: true,
@@ -158,7 +173,8 @@ export const getAllVideos = asyncHandler(async (req, res) => {
                 thumbnail: true,
                 views: true,
                 duration: true,
-                createdAt: true,
+            isPublished: true,
+            createdAt: true,
                 playbackUrl: true,
                 availableQualities: true,
                 processingStatus: true,
@@ -219,14 +235,18 @@ export const getAllVideos = asyncHandler(async (req, res) => {
     });
 
     return res.status(200).json(
-        new ApiResponse(200, {
-            videos: videosWithProgress,
-            pagination: {
+        new ApiResponse(
+            200,
+            buildPaginatedListData({
+                key: "videos",
+                items: videosWithProgress,
                 currentPage: page,
-                totalPages: Math.ceil(totalCount / limit),
-                totalVideos: totalCount
-            }
-        }, "Videos fetched successfully")
+                limit,
+                totalItems: totalCount,
+                legacyTotalKey: "totalVideos",
+            }),
+            "Videos fetched successfully"
+        )
     );
 });
 
@@ -316,7 +336,6 @@ export const getVideoById = asyncHandler(async (req, res) => {
 
     if (
         !video ||
-        !video.isPublished ||
         video.isDeleted ||
         video.processingStatus !== "COMPLETED" ||
         !video.isHlsReady
@@ -326,13 +345,14 @@ export const getVideoById = asyncHandler(async (req, res) => {
 
 
     // 🔐 Access control
-    if (!video.isPublished && video.owner.id !== userId) {
+    const isOwner = Boolean(userId && video.owner.id === userId);
+    if (!video.isPublished && !isOwner) {
         throw new ApiError(403, "This video is not published");
     }
 
     // Check if user is subscribed to channel
     let isSubscribed = false;
-    if (userId && video.owner.id !== userId) {
+    if (userId && !isOwner) {
         const subscription = await prisma.subscription.findUnique({
             where: {
                 subscriberId_channelId: {
@@ -345,7 +365,7 @@ export const getVideoById = asyncHandler(async (req, res) => {
     }
 
     // 👁️ Increase view count (only if viewer is not owner)
-    if (video.owner.id !== userId) {
+    if (!isOwner) {
         await prisma.video.update({
             where: { id: videoId },
             data: { views: { increment: 1 } }
@@ -393,9 +413,33 @@ export const updateVideo = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Video ID is required");
     }
 
-    // At least one field required
-    if (!title && !description && !req.file) {
-        throw new ApiError(400, "At least one field or thumbnail file is required");
+    const hasTitle = title !== undefined;
+    const hasDescription = description !== undefined;
+
+    // Metadata-only updates.
+    if (!hasTitle && !hasDescription) {
+        throw new ApiError(400, "At least one field is required");
+    }
+
+    const normalizedTitle = hasTitle ? String(title ?? "").trim() : undefined;
+    const normalizedDescription = hasDescription ? String(description ?? "").trim() : undefined;
+
+    if (hasTitle && !normalizedTitle) {
+        throw new ApiError(400, "Title cannot be empty");
+    }
+
+    if (normalizedTitle && normalizedTitle.length > MAX_VIDEO_TITLE_LENGTH) {
+        throw new ApiError(400, `Title too long (max ${MAX_VIDEO_TITLE_LENGTH})`);
+    }
+
+    if (
+        normalizedDescription !== undefined &&
+        normalizedDescription.length > MAX_VIDEO_DESCRIPTION_LENGTH
+    ) {
+        throw new ApiError(
+            400,
+            `Description too long (max ${MAX_VIDEO_DESCRIPTION_LENGTH})`
+        );
     }
 
     const existingVideo = await prisma.video.findUnique({
@@ -403,7 +447,8 @@ export const updateVideo = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
-            thumbnailPublicId: true,
+            title: true,
+            isShort: true,
             processingStatus: true,
             isHlsReady: true,
             isDeleted: true,
@@ -427,25 +472,10 @@ export const updateVideo = asyncHandler(async (req, res) => {
 
     const updateData = {};
 
-    if (title) updateData.title = title;
-    if (description) updateData.description = description;
+    if (normalizedTitle !== undefined) updateData.title = normalizedTitle;
+    if (normalizedDescription !== undefined) updateData.description = normalizedDescription;
 
     // 🖼️ Thumbnail update
-    if (req.file) {
-
-        const uploaded = await uploadOnCloudinary(req.file.path);
-
-        if (!uploaded) {
-            throw new ApiError(500, "Thumbnail upload failed");
-        }
-
-        await deleteImageOnCloudinary(existingVideo.thumbnailPublicId);
-
-        updateData.thumbnail = uploaded.secure_url;
-        updateData.thumbnailPublicId = uploaded.public_id;
-    }
-
-
     const updatedVideo = await prisma.video.update({
         where: { id: videoId },
         data: updateData,
@@ -467,12 +497,35 @@ export const updateVideo = asyncHandler(async (req, res) => {
             owner: {
                 select: {
                     id: true,
+                    fullName: true,
                     username: true,
                     avatar: true
                 }
             }
         }
     });
+
+    if (existingVideo.isPublished) {
+        const channelName =
+            updatedVideo.owner?.fullName ||
+            updatedVideo.owner?.username ||
+            "A channel you follow";
+
+        dispatchNotificationInBackground({
+            channelId: existingVideo.ownerId,
+            senderId: existingVideo.ownerId,
+            activityType: "VIDEO_UPDATED",
+            audience: ChannelNotificationAudience.ALL_ONLY,
+            title: "Video updated",
+            message: `${channelName} updated "${updatedVideo.title || existingVideo.title}"`,
+            videoId: updatedVideo.id,
+            extraData: {
+                channelName,
+                isShort: Boolean(updatedVideo.isShort ?? existingVideo.isShort),
+                videoTitle: updatedVideo.title || existingVideo.title,
+            },
+        });
+    }
 
     if (updatedVideo.isShort) {
         return res.status(200).json(
@@ -610,8 +663,23 @@ export const getAllDeletedVideos = asyncHandler(async (req, res) => {
         tags: video.tags.map(t => t.tag.name)
     }));
 
+    const totalVideos = await prisma.video.count({
+        where: whereClause,
+    });
+
     return res.status(200).json(
-        new ApiResponse(200, formattedVideos, "Videos fetched successfully")
+        new ApiResponse(
+            200,
+            buildPaginatedListData({
+                key: "videos",
+                items: formattedVideos,
+                currentPage: page,
+                limit,
+                totalItems: totalVideos,
+                legacyTotalKey: "totalVideos",
+            }),
+            "Videos fetched successfully"
+        )
     );
 });
 
@@ -669,10 +737,18 @@ export const togglePublishStatus = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
+            title: true,
+            isShort: true,
             isDeleted: true,
             isPublished: true,
             processingStatus: true,
-            isHlsReady: true
+            isHlsReady: true,
+            owner: {
+                select: {
+                    fullName: true,
+                    username: true,
+                },
+            },
         }
     });
 
@@ -695,6 +771,28 @@ export const togglePublishStatus = asyncHandler(async (req, res) => {
         data: { isPublished: !video.isPublished },
         select: { id: true, isPublished: true }
     });
+
+    if (updated.isPublished) {
+        const channelName =
+            video.owner?.fullName ||
+            video.owner?.username ||
+            "A channel you follow";
+
+        dispatchNotificationInBackground({
+            channelId: video.ownerId,
+            senderId: video.ownerId,
+            activityType: video.isShort ? "SHORT_PUBLISHED" : "VIDEO_PUBLISHED",
+            audience: ChannelNotificationAudience.ALL_AND_PERSONALIZED,
+            title: video.isShort ? "New short uploaded" : "New video uploaded",
+            message: `${channelName} uploaded "${video.title}"`,
+            videoId: video.id,
+            extraData: {
+                channelName,
+                isShort: video.isShort,
+                videoTitle: video.title,
+            },
+        });
+    }
 
     return res.json(
         new ApiResponse(
@@ -786,14 +884,14 @@ export const getUserVideos = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                videos,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos,
-                },
-            },
+            buildPaginatedListData({
+                key: "videos",
+                items: videos,
+                currentPage: page,
+                limit,
+                totalItems: totalVideos,
+                legacyTotalKey: "totalVideos",
+            }),
             "User videos fetched successfully"
         )
     );
@@ -805,9 +903,10 @@ export const getMyVideos = asyncHandler(async (req, res) => {
         limit = "10",
         query = "",
         isShort = "false",
+        includeUnpublished = "true",
         sortBy = "createdAt",
         sortType = "desc",
-        tags = "" // ✅ added
+        tags = ""
     } = req.query;
 
     page = Number(page);
@@ -823,11 +922,14 @@ export const getMyVideos = asyncHandler(async (req, res) => {
     // ✅ Base filter
     const whereClause = {
         ownerId: userId,
-        isPublished: true,
         isDeleted: false,
         isHlsReady: true,
         processingStatus: "COMPLETED",
     };
+
+    if (String(includeUnpublished).toLowerCase() !== "true") {
+        whereClause.isPublished = true;
+    }
 
 
     // 🔍 Search by title / description
@@ -881,6 +983,7 @@ export const getMyVideos = asyncHandler(async (req, res) => {
             thumbnail: true,
             views: true,
             duration: true,
+            isPublished: true,
             createdAt: true,
             playbackUrl: true,
             availableQualities: true,
@@ -903,18 +1006,20 @@ export const getMyVideos = asyncHandler(async (req, res) => {
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                videos: allPublishedVideos,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalVideos / limit),
-                    totalVideos
-                }
-            },
+            buildPaginatedListData({
+                key: "videos",
+                items: allPublishedVideos,
+                currentPage: page,
+                limit,
+                totalItems: totalVideos,
+                legacyTotalKey: "totalVideos",
+            }),
             "My videos fetched successfully"
         )
     );
 });
+
+
 
 
 

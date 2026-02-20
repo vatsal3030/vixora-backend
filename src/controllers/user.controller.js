@@ -15,6 +15,244 @@ import { getSecurityContext } from "../utils/securityContext.js";
 import { getCookieOptions } from "../utils/cookieOptions.js";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
 
+const normalizeEmail = (value) => String(value ?? "").trim().toLowerCase();
+const normalizeUsername = (value) => String(value ?? "").trim();
+const normalizeOtp = (value) => String(value ?? "").replace(/\D/g, "");
+const isValidSixDigitOtp = (otp) => /^\d{6}$/.test(otp);
+const MAX_CHANNEL_DESCRIPTION_LENGTH = 1000;
+const MAX_CHANNEL_LINKS = 14;
+const MAX_CHANNEL_LINK_TITLE_LENGTH = 40;
+const MAX_CHANNEL_LINK_URL_LENGTH = 2048;
+const CHANNEL_LINK_TRACKING_PARAMS = [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "gclid",
+    "fbclid",
+];
+const CHANNEL_LINK_PLATFORM_RULES = [
+    { platform: "youtube", hosts: ["youtube.com", "youtu.be"] },
+    { platform: "instagram", hosts: ["instagram.com"] },
+    { platform: "x", hosts: ["x.com", "twitter.com"] },
+    { platform: "facebook", hosts: ["facebook.com", "fb.com"] },
+    { platform: "linkedin", hosts: ["linkedin.com"] },
+    { platform: "github", hosts: ["github.com"] },
+    { platform: "discord", hosts: ["discord.com", "discord.gg"] },
+    { platform: "twitch", hosts: ["twitch.tv"] },
+    { platform: "telegram", hosts: ["t.me", "telegram.me"] },
+];
+const PASSWORD_RESET_TOKEN_COOKIE = "passwordResetToken";
+const PASSWORD_RESET_TOKEN_SECRET =
+    process.env.PASSWORD_RESET_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET;
+const PASSWORD_RESET_TOKEN_EXPIRY =
+    process.env.PASSWORD_RESET_TOKEN_EXPIRY || "10m";
+const getActiveOtpRemainingSeconds = (user) => {
+    if (!user?.otpHash || !user?.otpExpiresAt) return 0;
+    const remainingMs = user.otpExpiresAt.getTime() - Date.now();
+    return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+};
+
+const throwIfActiveOtpExists = (user) => {
+    const remaining = getActiveOtpRemainingSeconds(user);
+    if (remaining > 0) {
+        throw new ApiError(
+            429,
+            `OTP already sent. Please use the latest OTP or wait ${remaining}s before requesting a new one.`
+        );
+    }
+};
+
+const normalizeChannelDescription = (value) => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+
+    if (typeof value !== "string") {
+        throw new ApiError(400, "channelDescription must be a string");
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if (trimmed.length > MAX_CHANNEL_DESCRIPTION_LENGTH) {
+        throw new ApiError(400, `Description too long (max ${MAX_CHANNEL_DESCRIPTION_LENGTH})`);
+    }
+
+    return trimmed;
+};
+
+const stripDefaultWwwPrefix = (hostname) => {
+    const normalized = String(hostname ?? "").toLowerCase().trim();
+    return normalized.startsWith("www.") ? normalized.slice(4) : normalized;
+};
+
+const resolveChannelLinkPlatform = (hostname) => {
+    const host = stripDefaultWwwPrefix(hostname);
+
+    for (const rule of CHANNEL_LINK_PLATFORM_RULES) {
+        const matchedHost = rule.hosts.find(
+            (candidate) => host === candidate || host.endsWith(`.${candidate}`)
+        );
+
+        if (matchedHost) {
+            return rule.platform;
+        }
+    }
+
+    return "website";
+};
+
+const parseAndNormalizeUrl = (urlValue) => {
+    if (typeof urlValue !== "string") {
+        throw new ApiError(400, "Each channel link url must be a string");
+    }
+
+    let trimmedUrl = urlValue.trim();
+    if (!trimmedUrl) {
+        throw new ApiError(400, "Channel link url cannot be empty");
+    }
+
+    if (trimmedUrl.length > MAX_CHANNEL_LINK_URL_LENGTH) {
+        throw new ApiError(400, `Channel link url too long (max ${MAX_CHANNEL_LINK_URL_LENGTH})`);
+    }
+
+    if (!/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmedUrl)) {
+        trimmedUrl = `https://${trimmedUrl}`;
+    }
+
+    let parsed;
+    try {
+        parsed = new URL(trimmedUrl);
+    } catch {
+        throw new ApiError(400, "Invalid channel link URL");
+    }
+
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+        throw new ApiError(400, "Channel link URL must use http or https");
+    }
+
+    if (!parsed.hostname) {
+        throw new ApiError(400, "Channel link URL must include a valid host");
+    }
+
+    if (parsed.username || parsed.password) {
+        throw new ApiError(400, "Channel link URL cannot include credentials");
+    }
+
+    parsed.hash = "";
+    parsed.hostname = stripDefaultWwwPrefix(parsed.hostname);
+
+    if (
+        (parsed.protocol === "http:" && parsed.port === "80") ||
+        (parsed.protocol === "https:" && parsed.port === "443")
+    ) {
+        parsed.port = "";
+    }
+
+    parsed.pathname = parsed.pathname.replace(/\/{2,}/g, "/");
+    if (parsed.pathname.length > 1) {
+        parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+    }
+
+    for (const trackingKey of CHANNEL_LINK_TRACKING_PARAMS) {
+        parsed.searchParams.delete(trackingKey);
+    }
+
+    return {
+        url: parsed.toString(),
+        host: parsed.hostname,
+        platform: resolveChannelLinkPlatform(parsed.hostname),
+    };
+};
+
+const normalizeChannelLinks = (value) => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+
+    let entries;
+    if (Array.isArray(value)) {
+        entries = value;
+    } else if (typeof value === "string") {
+        const trimmedValue = value.trim();
+        if (!trimmedValue) {
+            return null;
+        }
+
+        try {
+            const parsedValue = JSON.parse(trimmedValue);
+            return normalizeChannelLinks(parsedValue);
+        } catch {
+            entries = [trimmedValue];
+        }
+    } else if (typeof value === "object") {
+        entries = Object.entries(value).map(([key, url]) => ({
+            title: key,
+            url,
+        }));
+    } else {
+        throw new ApiError(400, "channelLinks must be an array, object, or JSON string");
+    }
+
+    if (entries.length > MAX_CHANNEL_LINKS) {
+        throw new ApiError(400, `Too many channel links (max ${MAX_CHANNEL_LINKS})`);
+    }
+
+    const normalized = [];
+    for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+
+        let title;
+        let urlValue;
+
+        if (typeof entry === "string") {
+            title = `Link ${i + 1}`;
+            urlValue = entry;
+        } else if (entry && typeof entry === "object") {
+            title =
+                typeof entry.title === "string"
+                    ? entry.title
+                    : typeof entry.label === "string"
+                        ? entry.label
+                        : typeof entry.name === "string"
+                            ? entry.name
+                        : typeof entry.platform === "string"
+                            ? entry.platform
+                            : `Link ${i + 1}`;
+
+            urlValue =
+                entry.url ??
+                entry.link ??
+                entry.href ??
+                entry.website;
+        } else {
+            throw new ApiError(400, "Each channel link must be a string or object");
+        }
+
+        const normalizedTitle = String(title).trim().slice(0, MAX_CHANNEL_LINK_TITLE_LENGTH) || `Link ${i + 1}`;
+        const normalizedUrlData = parseAndNormalizeUrl(urlValue);
+
+        normalized.push({
+            title: normalizedTitle,
+            url: normalizedUrlData.url,
+            platform: normalizedUrlData.platform,
+            host: normalizedUrlData.host,
+        });
+    }
+
+    const seen = new Set();
+    const deduped = normalized.filter((item) => {
+        const key = item.url.toLowerCase();
+        if (seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+
+    return deduped.length > 0 ? deduped : null;
+};
+
 
 export const generateAccessAndRefreshToken = async (userId) => {
     try {
@@ -58,7 +296,6 @@ export const registerUser = asyncHandler(async (req, res) => {
         throw new ApiError(400, "All fields required");
     }
 
-
     const existingUser = await prisma.user.findFirst({
         where: { OR: [{ email }, { username }] }
     });
@@ -67,8 +304,10 @@ export const registerUser = asyncHandler(async (req, res) => {
         throw new ApiError(409, "User already exists");
     }
 
-    // 🟡 Exists but not verified → resend OTP
+    // 🟡 Exists but not verified -> resend OTP (with cooldown to avoid OTP churn)
     if (existingUser && !existingUser.emailVerified) {
+        throwIfActiveOtpExists(existingUser);
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const otpHash = await hashPassword(otp);
 
@@ -156,24 +395,33 @@ export const registerUser = asyncHandler(async (req, res) => {
     }
 
     return res.status(201).json(
-        new ApiResponse(201, {}, "User registered Successfully. Please verify your email.")
+        new ApiResponse(
+            201,
+            {},
+            "User registered Successfully. Please verify your email."
+        )
     );
 
 })
 
 export const verifyEmail = asyncHandler(async (req, res) => {
-    const { identifier, otp } = req.body;
+    const identifier = normalizeEmail(req.body?.identifier);
+    const otp = normalizeOtp(req.body?.otp);
 
-    if (!identifier?.trim() || !otp?.trim()) {
+    if (!identifier || !otp) {
         throw new ApiError(400, "Identifier and OTP are required");
+    }
+
+    if (!isValidSixDigitOtp(otp)) {
+        throw new ApiError(400, "OTP must be a 6-digit code");
     }
 
     // 🔍 Find user by email OR username
     const user = await prisma.user.findFirst({
         where: {
             OR: [
-                { email: identifier.toLowerCase().trim() },
-                { username: identifier.toLowerCase().trim() }
+                { email: identifier },
+                { username: identifier }
             ]
         }
     });
@@ -252,9 +500,9 @@ export const verifyEmail = asyncHandler(async (req, res) => {
 });
 
 export const resendOtp = asyncHandler(async (req, res) => {
-    const { identifier } = req.body;
+    const identifier = normalizeEmail(req.body?.identifier);
 
-    if (!identifier?.trim()) {
+    if (!identifier) {
         throw new ApiError(400, "Email or username is required");
     }
 
@@ -262,8 +510,8 @@ export const resendOtp = asyncHandler(async (req, res) => {
     const user = await prisma.user.findFirst({
         where: {
             OR: [
-                { email: identifier.toLowerCase().trim() },
-                { username: identifier.toLowerCase().trim() }
+                { email: identifier },
+                { username: identifier }
             ]
         }
     });
@@ -276,13 +524,8 @@ export const resendOtp = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Email already verified");
     }
 
-    // Check resend cooldown (2 minutes)
-    if (
-        user.otpLastSentAt &&
-        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
-    ) {
-        throw new ApiError(429, "Please wait before requesting again");
-    }
+    // Avoid replacing an active OTP (common source of "correct OTP but invalid" reports).
+    throwIfActiveOtpExists(user);
 
     // Generate new OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -553,13 +796,11 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
 })
 
 export const forgotPasswordRequest = asyncHandler(async (req, res) => {
-    const { email } = req.body;
+    const normalizedEmail = normalizeEmail(req.body?.email);
 
-    if (!email?.trim()) {
+    if (!normalizedEmail) {
         throw new ApiError(400, "Email is required");
     }
-
-    const normalizedEmail = email.toLowerCase().trim()
 
     const user = await prisma.user.findUnique({
         where: { email: normalizedEmail },
@@ -572,13 +813,13 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
         );
     }
 
-    // ⏱ resend cooldown
-    if (
-        user.otpLastSentAt &&
-        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
-    ) {
-        throw new ApiError(429, "Please wait before requesting again");
+    // Prevent overwriting email verification OTP for unverified users.
+    if (!user.emailVerified) {
+        throw new ApiError(403, "Email not verified. Verify OTP first.");
     }
+
+    // Do not overwrite active OTP; otherwise users often submit previous email code.
+    throwIfActiveOtpExists(user);
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = await hashPassword(otp);
@@ -607,23 +848,36 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
 
 
     return res.status(200).json(
-        new ApiResponse(200, {}, "If an account with that email exists, an OTP has been sent.")
+        new ApiResponse(
+            200,
+            {},
+            "If an account with that email exists, an OTP has been sent."
+        )
     );
 })
 
 export const forgotPasswordVerify = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
+    const email = normalizeEmail(req.body?.email);
+    const otp = normalizeOtp(req.body?.otp);
 
-    if (!email?.trim() || !otp?.trim()) {
+    if (!email || !otp) {
         throw new ApiError(400, "Email and OTP are required");
     }
 
+    if (!isValidSixDigitOtp(otp)) {
+        throw new ApiError(400, "OTP must be a 6-digit code");
+    }
+
     const user = await prisma.user.findUnique({
-        where: { email: email.toLowerCase() },
+        where: { email },
     });
 
     if (!user || !user.otpHash || !user.otpExpiresAt) {
         throw new ApiError(400, "Invalid or expired OTP");
+    }
+
+    if (!user.emailVerified) {
+        throw new ApiError(403, "Email not verified. Verify OTP first.");
     }
 
     if (user.otpExpiresAt < new Date()) {
@@ -645,32 +899,101 @@ export const forgotPasswordVerify = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Invalid OTP");
     }
 
-    return res.status(200).json(
-        new ApiResponse(200, {}, "OTP verified")
+    const passwordResetToken = jwt.sign(
+        {
+            id: user.id,
+            email: user.email,
+            purpose: "PASSWORD_RESET",
+        },
+        PASSWORD_RESET_TOKEN_SECRET,
+        { expiresIn: PASSWORD_RESET_TOKEN_EXPIRY }
     );
+
+    // Consume OTP after successful verification so step-2 does not require OTP again.
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            otpHash: null,
+            otpExpiresAt: null,
+            otpAttempts: 0,
+            otpLastSentAt: null,
+        },
+    });
+
+    const cookieOptions = {
+        ...getCookieOptions(),
+        path: "/api/v1/users",
+    };
+
+    return res
+        .status(200)
+        .cookie(PASSWORD_RESET_TOKEN_COOKIE, passwordResetToken, cookieOptions)
+        .json(new ApiResponse(200, {}, "OTP verified"));
 });
 
 export const resetPassword = asyncHandler(async (req, res) => {
-    const { email, otp, newPassword } = req.body;
+    const email = normalizeEmail(req.body?.email);
+    const otp = normalizeOtp(req.body?.otp);
+    const resetToken =
+        req.cookies?.[PASSWORD_RESET_TOKEN_COOKIE] || req.body?.resetToken;
+    const newPassword = String(req.body?.newPassword ?? "");
 
-    if (!email || !otp || !newPassword) {
-        throw new ApiError(400, "All fields are required");
+    if (!email || !newPassword.trim()) {
+        throw new ApiError(400, "Email and newPassword are required");
     }
 
     const user = await prisma.user.findUnique({
-        where: { email: email.toLowerCase() },
+        where: { email },
     });
 
-    if (!user || !user.otpHash) {
+    if (!user) {
         throw new ApiError(400, "Invalid request");
     }
 
-    const isValid = await comparePassword(otp, user.otpHash);
-    if (!isValid || user.otpExpiresAt < new Date()) {
-        throw new ApiError(400, "Invalid or expired OTP");
+    if (!user.emailVerified) {
+        throw new ApiError(403, "Email not verified. Verify OTP first.");
+    }
+
+    let resetAuthorized = false;
+
+    if (resetToken) {
+        try {
+            const decoded = jwt.verify(resetToken, PASSWORD_RESET_TOKEN_SECRET);
+
+            if (
+                decoded?.purpose === "PASSWORD_RESET" &&
+                decoded?.id === user.id &&
+                normalizeEmail(decoded?.email) === email
+            ) {
+                resetAuthorized = true;
+            }
+        } catch {
+            // fall through to legacy OTP verification below
+        }
+    }
+
+    // Backward-compatible fallback (legacy clients that still submit OTP directly).
+    if (!resetAuthorized && otp) {
+        if (!isValidSixDigitOtp(otp)) {
+            throw new ApiError(400, "OTP must be a 6-digit code");
+        }
+
+        const isValidOtp = await comparePassword(otp, user.otpHash);
+        if (isValidOtp && user.otpExpiresAt && user.otpExpiresAt >= new Date()) {
+            resetAuthorized = true;
+        }
+    }
+
+    if (!resetAuthorized) {
+        throw new ApiError(400, "Reset session expired. Verify OTP again.");
     }
 
     const hashedPassword = await hashPassword(newPassword);
+
+    const cookieOptions = {
+        ...getCookieOptions(),
+        path: "/api/v1/users",
+    };
 
     await prisma.user.update({
         where: { id: user.id },
@@ -684,9 +1007,12 @@ export const resetPassword = asyncHandler(async (req, res) => {
         },
     });
 
-    return res.status(200).json(
-        new ApiResponse(200, {}, "Password reset successfully. Please login.")
-    );
+    return res
+        .status(200)
+        .clearCookie(PASSWORD_RESET_TOKEN_COOKIE, cookieOptions)
+        .json(
+            new ApiResponse(200, {}, "Password reset successfully. Please login.")
+        );
 });
 
 export const getCurrentUser = asyncHandler(async (req, res) => {
@@ -697,10 +1023,8 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 })
 
 export const changeEmailRequest = asyncHandler(async (req, res) => {
-    let { email } = req.body;
+    let email = normalizeEmail(req.body?.email);
     const userId = req.user.id;
-
-    email = email?.toLowerCase().trim();
 
     if (!email) {
         throw new ApiError(400, "New email is required");
@@ -776,11 +1100,15 @@ export const changeEmailRequest = asyncHandler(async (req, res) => {
 });
 
 export const confirmEmailChange = asyncHandler(async (req, res) => {
-    const { otp } = req.body;
+    const otp = normalizeOtp(req.body?.otp);
     const userId = req.user.id;
 
-    if (!otp?.trim()) {
+    if (!otp) {
         throw new ApiError(400, "OTP is required");
+    }
+
+    if (!isValidSixDigitOtp(otp)) {
+        throw new ApiError(400, "OTP must be a 6-digit code");
     }
 
     const user = await prisma.user.findUnique({
@@ -1138,16 +1466,24 @@ export const updateChannelDescription = asyncHandler(async (req, res) => {
     const userId = req.user.id;
     const { channelDescription, channelLinks } = req.body;
 
-    if (channelDescription && channelDescription.length > 1000) {
-        throw new ApiError(400, "Description too long");
+    const normalizedDescription = normalizeChannelDescription(channelDescription);
+    const normalizedLinks = normalizeChannelLinks(channelLinks);
+
+    if (normalizedDescription === undefined && normalizedLinks === undefined) {
+        throw new ApiError(400, "At least one of channelDescription or channelLinks is required");
+    }
+
+    const updateData = {};
+    if (normalizedDescription !== undefined) {
+        updateData.channelDescription = normalizedDescription;
+    }
+    if (normalizedLinks !== undefined) {
+        updateData.channelLinks = normalizedLinks;
     }
 
     const updated = await prisma.user.update({
         where: { id: userId },
-        data: {
-            channelDescription,
-            channelLinks
-        },
+        data: updateData,
         select: userSafeSelect
     });
 
@@ -1183,17 +1519,18 @@ export const deleteAccount = asyncHandler(async (req, res) => {
 })
 
 export const restoreAccountRequest = asyncHandler(async (req, res) => {
-    const { email, username } = req.body;
+    const email = normalizeEmail(req.body?.email);
+    const username = normalizeUsername(req.body?.username);
 
-    if (!email?.trim() && !username?.trim()) {
+    if (!email && !username) {
         throw new ApiError(400, "Either email or username is required");
     }
 
     const user = await prisma.user.findFirst({
         where: {
             OR: [
-                { email: email?.toLowerCase().trim() },
-                { username: username?.trim() }
+                { email },
+                { username }
             ]
         }
     })
@@ -1211,16 +1548,8 @@ export const restoreAccountRequest = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Restore window expired. Account cannot be recovered.");
     }
 
-    // ⏱ OTP resend cooldown (2 minutes)
-    if (
-        user.otpLastSentAt &&
-        Date.now() - user.otpLastSentAt.getTime() < 2 * 60 * 1000
-    ) {
-        throw new ApiError(
-            429,
-            "OTP already sent. Please wait before requesting again."
-        );
-    }
+    // Avoid replacing active restore OTP.
+    throwIfActiveOtpExists(user);
 
 
     // generate OTP
@@ -1260,13 +1589,19 @@ export const restoreAccountRequest = asyncHandler(async (req, res) => {
 })
 
 export const restoreAccountConfirm = asyncHandler(async (req, res) => {
-    const { email, username, otp } = req.body;
+    const email = normalizeEmail(req.body?.email);
+    const username = normalizeUsername(req.body?.username);
+    const otp = normalizeOtp(req.body?.otp);
 
-    if (!otp?.trim()) {
+    if (!otp) {
         throw new ApiError(400, "OTP is required");
     }
 
-    if (!email?.trim() && !username?.trim()) {
+    if (!isValidSixDigitOtp(otp)) {
+        throw new ApiError(400, "OTP must be a 6-digit code");
+    }
+
+    if (!email && !username) {
         throw new ApiError(400, "Either email or username is required for restore confirmation");
     }
 
@@ -1274,8 +1609,8 @@ export const restoreAccountConfirm = asyncHandler(async (req, res) => {
         where: {
             isDeleted: true,
             OR: [
-                { email: email?.toLowerCase().trim() },
-                { username: username?.trim() }
+                { email },
+                { username }
             ]
         }
     })

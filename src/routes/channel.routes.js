@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { verifyJwt } from "../middlewares/auth.middleware.js";
+import { optionalJwt } from "../middlewares/auth.middleware.js";
 import {
+  getChannelAbout,
   getChannelInfo,
+  getChannelShorts,
   getChannelVideos,
   getChannelPlaylists,
   getChannelTweets
@@ -9,10 +11,10 @@ import {
 
 const router = Router();
 
-router.use(verifyJwt)
-
-router.get("/:channelId", getChannelInfo);
+router.get("/:channelId", optionalJwt, getChannelInfo);
+router.get("/:channelId/about", optionalJwt, getChannelAbout);
 router.get("/:channelId/videos", getChannelVideos);
+router.get("/:channelId/shorts", getChannelShorts);
 router.get("/:channelId/playlists", getChannelPlaylists);
 router.get("/:channelId/tweets", getChannelTweets);
 

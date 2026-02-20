@@ -2,6 +2,8 @@ import asyncHandler from "../utils/asyncHandler.js"
 import prisma from "../db/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
+import { sanitizePagination } from "../utils/pagination.js";
+import { buildPaginatedListData } from "../utils/listResponse.js";
 // import upd from "../utils/updateFeedScrore.js"
 
 // 1. Get videoId from params
@@ -20,22 +22,23 @@ export const updateVideoScore = async (videoId) => {
 
     if (!videoId) return;
 
-    const video = await prisma.video.findUnique({
-        where: { id: videoId },
-        include: {
-            likes: true,
-            comments: true,
-            watchHistory: true
-        }
-    });
+    const [video, likesCount, commentsCount, watchCount] = await Promise.all([
+        prisma.video.findUnique({
+            where: { id: videoId },
+            select: { views: true }
+        }),
+        prisma.like.count({ where: { videoId } }),
+        prisma.comment.count({ where: { videoId, isDeleted: false } }),
+        prisma.watchHistory.count({ where: { videoId } })
+    ]);
 
     if (!video) return;
 
     const score =
         video.views * 0.3 +
-        video.likes.length * 0.4 +
-        video.comments.length * 0.2 +
-        video.watchHistory.length * 0.1;
+        likesCount * 0.4 +
+        commentsCount * 0.2 +
+        watchCount * 0.1;
 
     await prisma.video.update({
         where: { id: videoId },
@@ -62,10 +65,22 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
 
     const video = await prisma.video.findUnique({
         where: { id: videoId },
-        select: { id: true },
+        select: {
+            id: true,
+            isPublished: true,
+            isDeleted: true,
+            processingStatus: true,
+            isHlsReady: true
+        },
     });
 
-    if (!video) {
+    if (
+        !video ||
+        !video.isPublished ||
+        video.isDeleted ||
+        video.processingStatus !== "COMPLETED" ||
+        !video.isHlsReady
+    ) {
         throw new ApiError(404, "Video not found");
     }
 
@@ -120,10 +135,10 @@ export const toggleCommentLike = asyncHandler(async (req, res) => {
     // ✅ Check comment existence
     const comment = await prisma.comment.findUnique({
         where: { id: commentId },
-        select: { id: true },
+        select: { id: true, isDeleted: true },
     });
 
-    if (!comment) {
+    if (!comment || comment.isDeleted) {
         throw new ApiError(404, "Comment not found");
     }
 
@@ -174,10 +189,10 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
 
     const tweet = await prisma.tweet.findUnique({
         where: { id: tweetId },
-        select: { id: true },
+        select: { id: true, isDeleted: true },
     });
 
-    if (!tweet) {
+    if (!tweet || tweet.isDeleted) {
         throw new ApiError(404, "Tweet not found");
     }
 
@@ -225,13 +240,7 @@ export const getLikedVideos = asyncHandler(async (req, res) => {
     }
 
     // 🔢 Parse pagination
-    page = Number(page);
-    limit = Number(limit);
-
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
-
-    const skip = (page - 1) * limit;
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
     sortType = sortType === "asc" ? "asc" : "desc";
 
     // ✅ Fetch liked videos (via likes table)
@@ -241,12 +250,20 @@ export const getLikedVideos = asyncHandler(async (req, res) => {
             videoId: {
                 not: null, // ✅ only video likes
             },
+            video: {
+                is: {
+                    isPublished: true,
+                    isDeleted: false,
+                    processingStatus: "COMPLETED",
+                    isHlsReady: true,
+                }
+            }
         },
         orderBy: {
             createdAt: sortType, // liked time
         },
         skip,
-        take: limit,
+        take: safeLimit,
         select: {
             video: {
                 select: {
@@ -281,20 +298,28 @@ export const getLikedVideos = asyncHandler(async (req, res) => {
             videoId: {
                 not: null,
             },
+            video: {
+                is: {
+                    isPublished: true,
+                    isDeleted: false,
+                    processingStatus: "COMPLETED",
+                    isHlsReady: true,
+                }
+            }
         },
     });
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                videos,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalLikedVideos / limit),
-                    totalLikedVideos,
-                },
-            },
+            buildPaginatedListData({
+                key: "videos",
+                items: videos,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalLikedVideos,
+                legacyTotalKey: "totalLikedVideos",
+            }),
             "Liked videos fetched successfully"
         )
     );

@@ -6,6 +6,134 @@ import asyncHandler from "../utils/asyncHandler.js"
 import crypto from "crypto";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
+import {
+    ChannelNotificationAudience,
+    dispatchChannelActivityNotification,
+} from "../services/notification.service.js";
+
+const MAX_UPLOAD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
+const MAX_UPLOAD_FILENAME_LENGTH = 255;
+const MAX_UPLOAD_MIMETYPE_LENGTH = 100;
+const MAX_VIDEO_TITLE_LENGTH = 120;
+const MAX_VIDEO_DESCRIPTION_LENGTH = 5000;
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 30;
+const DEFAULT_UPLOAD_SESSION_TTL_MINUTES = 120;
+const ALLOWED_UPLOAD_SESSION_TYPES = new Set([
+    "VIDEO",
+    "IMAGE",
+    "AVATAR",
+    "COVER_IMAGE",
+    "POST",
+    "TWEET",
+    "THUMBNAIL",
+]);
+const ALLOWED_SIGNATURE_RESOURCE_TYPES = new Set([
+    "video",
+    "thumbnail",
+    "avatar",
+    "post",
+    "tweet",
+    "cover",
+    "coverimage",
+]);
+
+const normalizeText = (value) => String(value ?? "").trim();
+
+const normalizeNumberOrNull = (value) => {
+    if (value === undefined || value === null || value === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+};
+
+const parsePositiveInt = (value, fallbackValue) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallbackValue;
+};
+
+const UPLOAD_SESSION_TTL_MINUTES = parsePositiveInt(
+    process.env.UPLOAD_SESSION_TTL_MINUTES,
+    DEFAULT_UPLOAD_SESSION_TTL_MINUTES
+);
+const UPLOAD_SESSION_TTL_MS = UPLOAD_SESSION_TTL_MINUTES * 60 * 1000;
+
+const isUploadSessionExpired = (session) => {
+    if (!session?.createdAt) return false;
+    const createdAtMs = new Date(session.createdAt).getTime();
+    if (!Number.isFinite(createdAtMs)) return false;
+    return Date.now() - createdAtMs > UPLOAD_SESSION_TTL_MS;
+};
+
+const markSessionExpiredIfNeeded = async (session) => {
+    if (!session || !isUploadSessionExpired(session)) return false;
+
+    if (!["COMPLETED", "FAILED"].includes(session.status)) {
+        await prisma.uploadSession.update({
+            where: { id: session.id },
+            data: {
+                status: "FAILED",
+                cancelledAt: new Date(),
+            },
+        }).catch(() => null);
+    }
+
+    return true;
+};
+
+const normalizeTags = (rawTags) => {
+    const input = Array.isArray(rawTags)
+        ? rawTags
+        : typeof rawTags === "string"
+            ? rawTags.split(",")
+            : [];
+
+    const seen = new Set();
+    const normalized = [];
+
+    for (const item of input) {
+        if (typeof item !== "string" && typeof item !== "number") {
+            continue;
+        }
+
+        const tag = normalizeText(item).toLowerCase();
+        if (!tag || tag.length > MAX_TAG_LENGTH) continue;
+        if (seen.has(tag)) continue;
+
+        seen.add(tag);
+        normalized.push(tag);
+
+        if (normalized.length >= MAX_TAGS) break;
+    }
+
+    return normalized;
+};
+
+const normalizeUploadSessionType = (rawType, normalizedMimeType) => {
+    const requestedType = normalizeText(rawType).toLowerCase();
+
+    if (!requestedType) {
+        return normalizedMimeType.startsWith("video/") ? "VIDEO" : "IMAGE";
+    }
+
+    const typeMap = {
+        video: "VIDEO",
+        image: "IMAGE",
+        avatar: "AVATAR",
+        cover: "COVER_IMAGE",
+        coverimage: "COVER_IMAGE",
+        cover_image: "COVER_IMAGE",
+        post: "POST",
+        tweet: "TWEET",
+        thumbnail: "THUMBNAIL",
+    };
+
+    const normalizedType = typeMap[requestedType];
+    if (!normalizedType || !ALLOWED_UPLOAD_SESSION_TYPES.has(normalizedType)) {
+        throw new ApiError(400, "Invalid uploadType");
+    }
+
+    return normalizedType;
+};
 
 const processVideoWithoutQueue = async (videoId) => {
     try {
@@ -33,7 +161,19 @@ const processVideoWithoutQueue = async (videoId) => {
 
         const video = await prisma.video.findUnique({
             where: { id: videoId },
-            select: { thumbnail: true, videoFile: true },
+            select: {
+                thumbnail: true,
+                videoFile: true,
+                title: true,
+                isShort: true,
+                ownerId: true,
+                owner: {
+                    select: {
+                        fullName: true,
+                        username: true,
+                    },
+                },
+            },
         });
 
         if (!video) {
@@ -61,6 +201,33 @@ const processVideoWithoutQueue = async (videoId) => {
                 isHlsReady: true,
             },
         });
+
+        try {
+            const channelName =
+                video.owner?.fullName ||
+                video.owner?.username ||
+                "A channel you follow";
+
+            await dispatchChannelActivityNotification({
+                channelId: video.ownerId,
+                senderId: video.ownerId,
+                activityType: video.isShort ? "SHORT_PUBLISHED" : "VIDEO_PUBLISHED",
+                audience: ChannelNotificationAudience.ALL_AND_PERSONALIZED,
+                title: video.isShort ? "New short uploaded" : "New video uploaded",
+                message: `${channelName} uploaded "${video.title}"`,
+                videoId,
+                extraData: {
+                    channelName,
+                    isShort: video.isShort,
+                    videoTitle: video.title,
+                },
+            });
+        } catch (notificationError) {
+            console.error(
+                "Notification dispatch failed (fallback):",
+                notificationError?.message || notificationError
+            );
+        }
     } catch (error) {
         console.error("Fallback video processing failed:", error?.message || error);
         await prisma.video.update({
@@ -77,10 +244,28 @@ const processVideoWithoutQueue = async (videoId) => {
 CREATE UPLOAD SESSION
 */
 export const createUploadSession = asyncHandler(async (req, res) => {
-    const { fileName, fileSize, mimeType } = req.body;
+    const { fileName, fileSize, mimeType, uploadType } = req.body;
 
     if (!fileName || fileSize === undefined || !mimeType) {
         throw new ApiError(400, "fileName, fileSize, mimeType required");
+    }
+
+    const normalizedFileName = normalizeText(fileName);
+    const normalizedMimeType = normalizeText(mimeType).toLowerCase();
+
+    if (
+        !normalizedFileName ||
+        normalizedFileName.length > MAX_UPLOAD_FILENAME_LENGTH
+    ) {
+        throw new ApiError(400, "Invalid fileName");
+    }
+
+    if (
+        !normalizedMimeType ||
+        normalizedMimeType.length > MAX_UPLOAD_MIMETYPE_LENGTH ||
+        (!normalizedMimeType.startsWith("video/") && !normalizedMimeType.startsWith("image/"))
+    ) {
+        throw new ApiError(400, "Invalid mimeType");
     }
 
     const numericFileSize = Number(fileSize);
@@ -88,16 +273,19 @@ export const createUploadSession = asyncHandler(async (req, res) => {
     if (
         !Number.isFinite(numericFileSize) ||
         numericFileSize <= 0 ||
-        numericFileSize > 5 * 1024 * 1024 * 1024 // 5GB cap
+        numericFileSize > MAX_UPLOAD_FILE_SIZE_BYTES
     ) {
         throw new ApiError(400, "Invalid file size");
     }
+
+    const normalizedUploadType = normalizeUploadSessionType(uploadType, normalizedMimeType);
 
     const session = await prisma.uploadSession.create({
         data: {
             userId: req.user.id,
             status: "INITIATED",
             totalSize: numericFileSize,
+            uploadType: normalizedUploadType,
         },
     });
 
@@ -105,6 +293,7 @@ export const createUploadSession = asyncHandler(async (req, res) => {
         ...session,
         totalSize: session.totalSize?.toString(),
         uploadedSize: session.uploadedSize?.toString(),
+        uploadType: session.uploadType,
     };
 
     return res.status(201).json(
@@ -129,6 +318,13 @@ export const cancelUploadSession = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Not allowed");
     }
 
+    const expired = await markSessionExpiredIfNeeded(session);
+    if (expired) {
+        return res.status(200).json(
+            new ApiResponse(200, {}, "Upload session already expired")
+        );
+    }
+
     await prisma.uploadSession.update({
         where: { id: sessionId },
         data: {
@@ -146,7 +342,11 @@ export const cancelUploadSession = asyncHandler(async (req, res) => {
 GET CLOUDINARY SIGNATURE
 */
 export const getUploadSignature = asyncHandler(async (req, res) => {
-    const { resourceType = "video" } = req.query;
+    const normalizedResourceType = normalizeText(req.query?.resourceType || "video").toLowerCase();
+
+    if (!ALLOWED_SIGNATURE_RESOURCE_TYPES.has(normalizedResourceType)) {
+        throw new ApiError(400, "Invalid resourceType");
+    }
 
     if (!req.user.emailVerified) {
         throw new ApiError(403, "Verify email first");
@@ -158,10 +358,13 @@ export const getUploadSignature = asyncHandler(async (req, res) => {
         video: `videos/${req.user.id}`,
         thumbnail: `thumbnails/${req.user.id}`,
         avatar: `avatars/${req.user.id}`,
-        post: `posts/${req.user.id}`,
+        post: `tweets/${req.user.id}`,
+        tweet: `tweets/${req.user.id}`,
+        cover: `covers/${req.user.id}`,
+        coverimage: `covers/${req.user.id}`,
     };
 
-    const folder = folderMap[resourceType] || `misc/${req.user.id}`;
+    const folder = folderMap[normalizedResourceType];
 
     const publicId = `${folder}/${crypto.randomUUID()}`;
 
@@ -179,7 +382,7 @@ export const getUploadSignature = asyncHandler(async (req, res) => {
             publicId,
             cloudName: process.env.CLOUDINARY_CLOUD_NAME,
             api_key: process.env.CLOUDINARY_API_KEY,
-            resourceType,
+            resourceType: normalizedResourceType,
         })
     );
 });
@@ -216,6 +419,14 @@ export const updateUploadProgress = asyncHandler(async (req, res) => {
 
     if (session.userId !== req.user.id) {
         throw new ApiError(403, "Not allowed");
+    }
+
+    const expired = await markSessionExpiredIfNeeded(session);
+    if (expired) {
+        throw new ApiError(
+            410,
+            `Upload session expired after ${UPLOAD_SESSION_TTL_MINUTES} minutes. Create a new session.`
+        );
     }
 
     if (
@@ -266,25 +477,35 @@ FINALIZE UPLOAD → CREATE VIDEO + START PROCESSING
 export const finalizeUpload = asyncHandler(async (req, res) => {
     const { sessionId } = req.params;
 
-    const {
-        title,
-        description,
-        publicId,
-        thumbnailPublicId,
-        duration,
-        width,
-        height,
-        tags = [],
-        isShort = false
-    } = req.body;
+    const rawTitle = normalizeText(req.body?.title);
+    const rawDescription = normalizeText(req.body?.description);
+    const publicId = normalizeText(req.body?.publicId);
+    const thumbnailPublicId = normalizeText(req.body?.thumbnailPublicId);
+    const duration = normalizeNumberOrNull(req.body?.duration);
+    const width = normalizeNumberOrNull(req.body?.width);
+    const height = normalizeNumberOrNull(req.body?.height);
+    const tags = normalizeTags(req.body?.tags);
+    const isShort = req.body?.isShort ?? false;
 
     if (
-        !title ||
-        !description ||
+        !rawTitle ||
+        !rawDescription ||
         !publicId ||
         !thumbnailPublicId
     ) {
         throw new ApiError(400, "Missing required fields");
+    }
+
+    if (rawTitle.length > MAX_VIDEO_TITLE_LENGTH) {
+        throw new ApiError(400, `title too long (max ${MAX_VIDEO_TITLE_LENGTH})`);
+    }
+
+    if (rawDescription.length > MAX_VIDEO_DESCRIPTION_LENGTH) {
+        throw new ApiError(400, `description too long (max ${MAX_VIDEO_DESCRIPTION_LENGTH})`);
+    }
+
+    if (publicId.length > 300 || thumbnailPublicId.length > 300) {
+        throw new ApiError(400, "Invalid public ID length");
     }
 
     const session = await prisma.uploadSession.findUnique({
@@ -295,6 +516,14 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
 
     if (!session.userId || session.userId !== req.user.id) {
         throw new ApiError(403, "Not allowed");
+    }
+
+    const expired = await markSessionExpiredIfNeeded(session);
+    if (expired) {
+        throw new ApiError(
+            410,
+            `Upload session expired after ${UPLOAD_SESSION_TTL_MINUTES} minutes. Create a new session.`
+        );
     }
 
     if (session.status === "FAILED") throw new ApiError(400, "Upload cancelled");
@@ -339,12 +568,13 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
     const safeVideoUrl = videoResource.secure_url;
     const safeThumbUrl = thumbResource.secure_url;
 
+    if (!safeVideoUrl || !safeThumbUrl) {
+        throw new ApiError(500, "Cloudinary returned invalid media metadata");
+    }
+
 
     /* ---------- SAFE TAG PARSE ---------- */
-
-    const tagArray = Array.isArray(tags)
-        ? tags.map(t => t.toLowerCase().trim())
-        : [];
+    const tagArray = tags;
 
     const video = await prisma.$transaction(async (tx) => {
 
@@ -371,10 +601,13 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
 
         const newVideo = await tx.video.create({
             data: {
-                title,
-                description,
-                duration: duration ? Math.round(duration) : 0,
-                aspectRatio: width && height ? `${width}:${height}` : null,
+                title: rawTitle,
+                description: rawDescription,
+                duration: duration && duration > 0 ? Math.round(duration) : 0,
+                aspectRatio:
+                    width && height && width > 0 && height > 0
+                        ? `${Math.round(width)}:${Math.round(height)}`
+                        : null,
 
                 videoFile: safeVideoUrl,
                 playbackUrl: cloudinaryPlaybackUrl,

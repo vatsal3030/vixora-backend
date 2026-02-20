@@ -1,6 +1,9 @@
 import "dotenv/config";
+import { createServer } from "node:http";
 import app from "./app.js";
 import prisma from "./db/prisma.js";
+import { parseAllowedOrigins } from "./config/cors.config.js";
+import { initSocketServer } from "./realtime/socket.server.js";
 
 const PORT = process.env.PORT || 5000;
 
@@ -32,7 +35,11 @@ async function startServer() {
     await prisma.$connect();
     console.log("Database connected");
 
-    const server = app.listen(PORT, () => {
+    const httpServer = createServer(app);
+    const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN);
+    initSocketServer({ httpServer, allowedOrigins });
+
+    const server = httpServer.listen(PORT, () => {
       console.log(`Server running on ${PORT}`);
     });
 

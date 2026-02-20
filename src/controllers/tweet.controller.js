@@ -4,13 +4,27 @@ import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import { deleteImageOnCloudinary } from "../utils/cloudinary.js";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
+import { sanitizePagination } from "../utils/pagination.js";
+import { sanitizeSort } from "../utils/sanitizeSort.js";
+import { buildPaginatedListData } from "../utils/listResponse.js";
+import {
+    ChannelNotificationAudience,
+    dispatchChannelActivityNotification,
+} from "../services/notification.service.js";
+
+const MAX_TWEET_CONTENT_LENGTH = 500;
 
 export const createTweet = asyncHandler(async (req, res) => {
 
-    const { content, imageUrl, imagePublicId } = req.body;
+    const content = String(req.body?.content ?? "").trim();
+    const imagePublicId = String(req.body?.imagePublicId ?? "").trim();
 
-    if (!content?.trim()) {
+    if (!content) {
         throw new ApiError(400, "Content required");
+    }
+
+    if (content.length > MAX_TWEET_CONTENT_LENGTH) {
+        throw new ApiError(400, `Tweet content too long (max ${MAX_TWEET_CONTENT_LENGTH})`);
     }
 
     if (!req.user.emailVerified) {
@@ -34,11 +48,34 @@ export const createTweet = asyncHandler(async (req, res) => {
 
     const tweet = await prisma.tweet.create({
         data: {
-            content: content.trim(),
+            content,
             image: finalImageUrl,
             imageId: finalImagePublicId,
             ownerId: req.user.id
         }
+    });
+
+    const channelName =
+        req.user?.fullName ||
+        req.user?.username ||
+        "A channel you follow";
+
+    void dispatchChannelActivityNotification({
+        channelId: req.user.id,
+        senderId: req.user.id,
+        activityType: "POST_CREATED",
+        audience: ChannelNotificationAudience.ALL_ONLY,
+        title: "New post",
+        message: `${channelName} posted: "${content.slice(0, 80)}${content.length > 80 ? "..." : ""}"`,
+        extraData: {
+            channelName,
+            tweetId: tweet.id,
+        },
+    }).catch((error) => {
+        console.error(
+            "Notification dispatch failed (tweet):",
+            error?.message || error
+        );
     });
 
     return res.status(201).json(
@@ -55,24 +92,11 @@ export const getUserTweets = asyncHandler(async (req, res) => {
         throw new ApiError(400, "User ID is required");
     }
 
-    page = Number(page);
-    limit = Number(limit);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
 
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
-
-    const skip = (page - 1) * limit;
-
-    const allowedSortFields = [
-        "createdAt",
-        "updatedAt"
-    ];
-
-    if (!allowedSortFields.includes(sortBy)) {
-        sortBy = "createdAt";
-    }
-
-    sortType = sortType === "asc" ? "asc" : "desc";
+    const safeSort = sanitizeSort(sortBy, sortType, ["createdAt", "updatedAt"], "createdAt");
+    sortBy = safeSort.sortBy;
+    sortType = safeSort.sortType;
 
 
     const tweets = await prisma.tweet.findMany({
@@ -82,7 +106,7 @@ export const getUserTweets = asyncHandler(async (req, res) => {
         },
         orderBy: { [sortBy]: sortType },
         skip,
-        take: limit,
+        take: safeLimit,
         select: {
             id: true,
             content: true,
@@ -105,13 +129,6 @@ export const getUserTweets = asyncHandler(async (req, res) => {
         },
     });
 
-    const totalTweets = await prisma.tweet.count({
-        where: {
-            ownerId: userId,
-            isDeleted: false,
-        },
-    });
-
     // Format tweets with like counts
     const formattedTweets = tweets.map(tweet => ({
         ...tweet,
@@ -120,10 +137,24 @@ export const getUserTweets = asyncHandler(async (req, res) => {
         _count: undefined
     }));
 
+    const totalTweets = await prisma.tweet.count({
+        where: {
+            ownerId: userId,
+            isDeleted: false,
+        },
+    });
+
     return res.status(200).json(
         new ApiResponse(
             200,
-            formattedTweets,
+            buildPaginatedListData({
+                key: "tweets",
+                items: formattedTweets,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalTweets,
+                legacyTotalKey: "totalTweets",
+            }),
             "Tweets fetched successfully"
         )
     );
@@ -173,10 +204,14 @@ export const getTweetById = asyncHandler(async (req, res) => {
 
 export const updateTweet = asyncHandler(async (req, res) => {
     const { tweetId } = req.params;
-    const { content } = req.body;
+    const content = String(req.body?.content ?? "").trim();
 
-    if (!content || content.trim().length === 0) {
+    if (!content) {
         throw new ApiError(400, "Content is required");
+    }
+
+    if (content.length > MAX_TWEET_CONTENT_LENGTH) {
+        throw new ApiError(400, `Tweet content too long (max ${MAX_TWEET_CONTENT_LENGTH})`);
     }
 
     const tweet = await prisma.tweet.findFirst({
@@ -200,7 +235,7 @@ export const updateTweet = asyncHandler(async (req, res) => {
     const updatedTweet = await prisma.tweet.update({
         where: { id: tweetId },
         data: {
-            content: content.trim(),
+            content,
         },
     });
 
@@ -238,7 +273,10 @@ export const deleteTweet = asyncHandler(async (req, res) => {
 
     await prisma.tweet.update({
         where: { id: tweetId },
-        data: { isDeleted: true },
+        data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+        },
     });
 
     return res.status(200).json(
@@ -269,7 +307,10 @@ export const restoreTweet = asyncHandler(async (req, res) => {
 
     await prisma.tweet.update({
         where: { id: tweetId },
-        data: { isDeleted: false },
+        data: {
+            isDeleted: false,
+            deletedAt: null,
+        },
     });
 
     return res.status(200).json(
@@ -279,6 +320,9 @@ export const restoreTweet = asyncHandler(async (req, res) => {
 
 export const getDeletedTweets = asyncHandler(async (req, res) => {
     const userId = req.user.id;
+    let { page = "1", limit = "20" } = req.query;
+
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
 
     const deletedTweets = await prisma.tweet.findMany({
         where: {
@@ -288,6 +332,8 @@ export const getDeletedTweets = asyncHandler(async (req, res) => {
         orderBy: {
             updatedAt: "desc",
         },
+        skip,
+        take: safeLimit,
         select: {
             id: true,
             content: true,
@@ -296,10 +342,26 @@ export const getDeletedTweets = asyncHandler(async (req, res) => {
         },
     });
 
-
+    const totalDeletedTweets = await prisma.tweet.count({
+        where: {
+            ownerId: userId,
+            isDeleted: true,
+        },
+    });
 
     return res.status(200).json(
-        new ApiResponse(200, deletedTweets, "Deleted tweets fetched")
+        new ApiResponse(
+            200,
+            buildPaginatedListData({
+                key: "tweets",
+                items: deletedTweets,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalDeletedTweets,
+                legacyTotalKey: "totalTweets",
+            }),
+            "Deleted tweets fetched"
+        )
     );
 });
 

@@ -1,6 +1,7 @@
 import express from "express";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 import {
+    getDashboardFull,
     getDashboardOverview,
     getAnalytics,
     getTopVideos,
@@ -12,6 +13,7 @@ const router = express.Router();
 
 router.use(verifyJwt);
 
+router.get("/full", getDashboardFull);
 router.get("/overview", getDashboardOverview);
 router.get("/analytics", getAnalytics);
 router.get("/top-videos", getTopVideos);

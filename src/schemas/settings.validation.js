@@ -1,30 +1,43 @@
 import { z } from "zod";
 
-export const settingsSchema = z.object({
+const booleanField = () =>
+  z.preprocess((value) => {
+    if (value === "true") return true;
+    if (value === "false") return false;
+    return value;
+  }, z.boolean());
 
-  profileVisibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
+const playbackSpeedField = z.preprocess((value) => {
+  if (value === undefined || value === null || value === "") return value;
+  if (typeof value === "string") return Number(value);
+  return value;
+}, z.number().min(0.25).max(3));
 
-  showSubscriptions: z.boolean().optional(),
-  showLikedVideos: z.boolean().optional(),
-  allowComments: z.boolean().optional(),
-  allowMentions: z.boolean().optional(),
+export const settingsSchema = z
+  .object({
+    profileVisibility: z.enum(["PUBLIC", "PRIVATE"]).optional(),
 
-  emailNotifications: z.boolean().optional(),
-  commentNotifications: z.boolean().optional(),
-  subscriptionNotifications: z.boolean().optional(),
-  systemAnnouncements: z.boolean().optional(),
+    showSubscriptions: booleanField().optional(),
+    showLikedVideos: booleanField().optional(),
+    allowComments: booleanField().optional(),
+    allowMentions: booleanField().optional(),
 
-  autoplayNext: z.boolean().optional(),
-  defaultPlaybackSpeed: z.number().min(0.25).max(3).optional(),
-  saveWatchHistory: z.boolean().optional(),
+    emailNotifications: booleanField().optional(),
+    commentNotifications: booleanField().optional(),
+    subscriptionNotifications: booleanField().optional(),
+    systemAnnouncements: booleanField().optional(),
 
-  showProgressBar: z.boolean().optional(),
-  showViewCount: z.boolean().optional(),
-  showVideoDuration: z.boolean().optional(),
-  showChannelName: z.boolean().optional(),
+    autoplayNext: booleanField().optional(),
+    defaultPlaybackSpeed: playbackSpeedField.optional(),
+    saveWatchHistory: booleanField().optional(),
 
-  personalizeRecommendations: z.boolean().optional(),
-  showTrending: z.boolean().optional(),
-  hideShorts: z.boolean().optional()
+    showProgressBar: booleanField().optional(),
+    showViewCount: booleanField().optional(),
+    showVideoDuration: booleanField().optional(),
+    showChannelName: booleanField().optional(),
 
-});
+    personalizeRecommendations: booleanField().optional(),
+    showTrending: booleanField().optional(),
+    hideShorts: booleanField().optional(),
+  })
+  .strict();

@@ -4,6 +4,17 @@ import {
   deleteImageOnCloudinary
 } from "../utils/cloudinary.js";
 
+export const normalizeImageType = (rawType) => {
+  const normalized = String(rawType ?? "").trim().toLowerCase();
+
+  if (normalized === "avatar") return "avatar";
+  if (["coverimage", "cover", "cover_image"].includes(normalized)) {
+    return "coverImage";
+  }
+
+  return null;
+};
+
 /*
 UPDATE USER IMAGE (AVATAR / COVER)
 */
@@ -14,7 +25,9 @@ export const updateUserImage = async ({
   publicId
 }) => {
 
-  if (!["avatar", "coverImage"].includes(type)) {
+  const normalizedType = normalizeImageType(type);
+
+  if (!normalizedType) {
     throw new ApiError(400, "Invalid image type");
   }
 
@@ -31,12 +44,14 @@ export const updateUserImage = async ({
   /* DELETE OLD IMAGE */
 
   const oldPublicId =
-    type === "avatar"
+    normalizedType === "avatar"
       ? user.avatarPublicId
       : user.coverImagePublicId;
 
   if (oldPublicId) {
-    await deleteImageOnCloudinary(oldPublicId);
+    await deleteImageOnCloudinary(oldPublicId).catch((error) => {
+      console.error("Failed to delete previous image on Cloudinary:", error?.message || error);
+    });
   }
 
   /* UPDATE DB */
@@ -44,7 +59,7 @@ export const updateUserImage = async ({
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data:
-      type === "avatar"
+      normalizedType === "avatar"
         ? {
           avatar: url,
           avatarPublicId: publicId
@@ -70,28 +85,44 @@ export const deleteUserImage = async ({
   userId,
   type
 }) => {
+  const normalizedType = normalizeImageType(type);
+
+  if (!normalizedType) {
+    throw new ApiError(400, "Invalid image type");
+  }
 
   const user = await prisma.user.findUnique({
-    where: { id: userId }
+    where: { id: userId },
+    select: {
+      avatarPublicId: true,
+      coverImagePublicId: true
+    }
   });
 
   if (!user) throw new ApiError(404, "User not found");
 
   const publicId =
-    type === "avatar"
+    normalizedType === "avatar"
       ? user.avatarPublicId
       : user.coverImagePublicId;
 
   if (publicId) {
-    await deleteImageOnCloudinary(publicId);
+    await deleteImageOnCloudinary(publicId).catch((error) => {
+      console.error("Failed to delete image on Cloudinary:", error?.message || error);
+    });
   }
 
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data:
-      type === "avatar"
+      normalizedType === "avatar"
         ? { avatar: null, avatarPublicId: null }
-        : { coverImage: null, coverImagePublicId: null }
+        : { coverImage: null, coverImagePublicId: null },
+    select: {
+      id: true,
+      avatar: true,
+      coverImage: true
+    }
   });
 
   return updatedUser;

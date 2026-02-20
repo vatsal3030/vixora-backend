@@ -2,6 +2,11 @@ import prisma from "../db/prisma.js"
 import ApiError from "../utils/ApiError.js"
 import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
+import { sanitizePagination } from "../utils/pagination.js";
+import { sanitizeSort } from "../utils/sanitizeSort.js";
+import { buildPaginatedListData } from "../utils/listResponse.js";
+
+const MAX_COMMENT_LENGTH = 1000;
 
 export const getVideoComments = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
@@ -18,28 +23,46 @@ export const getVideoComments = asyncHandler(async (req, res) => {
 
     const userId = req.user?.id; // OPTIONAL
 
-    page = Number(page);
-    limit = Number(limit);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+    const safeSort = sanitizeSort("createdAt", sortType, ["createdAt"], "createdAt");
+    sortType = safeSort.sortType;
 
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
+    const video = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: {
+            id: true,
+            isPublished: true,
+            isDeleted: true,
+            processingStatus: true,
+            isHlsReady: true,
+        }
+    });
 
-    const skip = (page - 1) * limit;
-    sortType = sortType === "asc" ? "asc" : "desc";
+    if (
+        !video ||
+        !video.isPublished ||
+        video.isDeleted ||
+        video.processingStatus !== "COMPLETED" ||
+        !video.isHlsReady
+    ) {
+        throw new ApiError(404, "Video not found");
+    }
 
     const comments = await prisma.comment.findMany({
         where: {
-            videoId
+            videoId,
+            isDeleted: false,
         },
         orderBy: {
             createdAt: sortType,
         },
         skip,
-        take: limit,
+        take: safeLimit,
         select: {
             id: true,
             content: true,
             createdAt: true,
+            updatedAt: true,
             ownerId: true,
             owner: {
                 select: {
@@ -52,25 +75,37 @@ export const getVideoComments = asyncHandler(async (req, res) => {
                 select: {
                     likes: true,
                 }
-            }
+            },
+            likes: userId ? {
+                where: { likedById: userId },
+                select: { id: true }
+            } : false,
         }
     });
 
     const totalComments = await prisma.comment.count({
-        where: { videoId }
+        where: { videoId, isDeleted: false }
     });
+
+    const formattedComments = comments.map((comment) => ({
+        ...comment,
+        likesCount: comment._count.likes,
+        isLiked: userId ? comment.likes.length > 0 : false,
+        _count: undefined,
+        likes: undefined,
+    }));
 
     return res.status(200).json(
         new ApiResponse(
             200,
-            {
-                comments,
-                pagination: {
-                    currentPage: page,
-                    totalPages: Math.ceil(totalComments / limit),
-                    totalComments,
-                },
-            },
+            buildPaginatedListData({
+                key: "comments",
+                items: formattedComments,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalComments,
+                legacyTotalKey: "totalComments",
+            }),
             "Comments fetched successfully"
         )
     );
@@ -88,26 +123,42 @@ export const addComment = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized");
     }
 
-    const { content } = req.body;
+    const content = String(req.body?.content ?? "").trim();
 
-    if (!content || content.trim().length === 0) {
+    if (!content) {
         throw new ApiError(400, "Comment content cannot be empty");
+    }
+
+    if (content.length > MAX_COMMENT_LENGTH) {
+        throw new ApiError(400, `Comment too long (max ${MAX_COMMENT_LENGTH})`);
     }
 
     // ✅ Check video existence
     const video = await prisma.video.findUnique({
         where: { id: videoId },
-        select: { id: true },
+        select: {
+            id: true,
+            isPublished: true,
+            isDeleted: true,
+            processingStatus: true,
+            isHlsReady: true,
+        },
     });
 
-    if (!video) {
+    if (
+        !video ||
+        !video.isPublished ||
+        video.isDeleted ||
+        video.processingStatus !== "COMPLETED" ||
+        !video.isHlsReady
+    ) {
         throw new ApiError(404, "Video not found");
     }
 
     // ✅ Create comment
     const comment = await prisma.comment.create({
         data: {
-            content: content.trim(),
+            content,
             ownerId: userId,
             videoId: videoId,
         },
@@ -143,10 +194,14 @@ export const updateComment = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized");
     }
 
-    const { content } = req.body;
+    const content = String(req.body?.content ?? "").trim();
 
-    if (!content || content.trim().length === 0) {
+    if (!content) {
         throw new ApiError(400, "Comment content cannot be empty");
+    }
+
+    if (content.length > MAX_COMMENT_LENGTH) {
+        throw new ApiError(400, `Comment too long (max ${MAX_COMMENT_LENGTH})`);
     }
 
     // ✅ Check comment existence + ownership
@@ -155,10 +210,11 @@ export const updateComment = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
+            isDeleted: true,
         },
     });
 
-    if (!existingComment) {
+    if (!existingComment || existingComment.isDeleted) {
         throw new ApiError(404, "Comment not found");
     }
 
@@ -170,7 +226,7 @@ export const updateComment = asyncHandler(async (req, res) => {
     const updatedComment = await prisma.comment.update({
         where: { id: commentId },
         data: {
-            content: content.trim(),
+            content,
         },
         select: {
             id: true,
@@ -209,6 +265,7 @@ export const deleteComment = asyncHandler(async (req, res) => {
         select: {
             id: true,
             ownerId: true,
+            isDeleted: true,
         },
     });
 
@@ -220,9 +277,19 @@ export const deleteComment = asyncHandler(async (req, res) => {
         throw new ApiError(403, "You are not allowed to delete this comment");
     }
 
-    // ✅ Delete comment
-    await prisma.comment.delete({
+    if (existingComment.isDeleted) {
+        return res.status(200).json(
+            new ApiResponse(200, {}, "Comment deleted successfully")
+        );
+    }
+
+    // ✅ Soft delete comment
+    await prisma.comment.update({
         where: { id: commentId },
+        data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+        },
     });
 
     return res.status(200).json(

@@ -2,10 +2,15 @@ import { Worker } from "bullmq";
 import {
   closeRedisConnection,
   getRedisConnection,
+  isTransientRedisError,
 } from "../queue/redis.connection.js";
 import { closeVideoQueue } from "../queue/video.queue.js";
 import prisma from "../db/prisma.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
+import {
+  ChannelNotificationAudience,
+  dispatchChannelActivityNotification,
+} from "../services/notification.service.js";
 
 const parseBool = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;
@@ -82,7 +87,19 @@ const processJob = async (job) => {
 
         const video = await prisma.video.findUnique({
           where: { id: videoId },
-          select: { thumbnail: true, videoFile: true },
+          select: {
+            thumbnail: true,
+            videoFile: true,
+            title: true,
+            isShort: true,
+            ownerId: true,
+            owner: {
+              select: {
+                fullName: true,
+                username: true,
+              },
+            },
+          },
         });
 
         if (!video) {
@@ -108,6 +125,33 @@ const processJob = async (job) => {
             isHlsReady: true,
           },
         });
+
+        try {
+          const channelName =
+            video.owner?.fullName ||
+            video.owner?.username ||
+            "A channel you follow";
+
+          await dispatchChannelActivityNotification({
+            channelId: video.ownerId,
+            senderId: video.ownerId,
+            activityType: video.isShort ? "SHORT_PUBLISHED" : "VIDEO_PUBLISHED",
+            audience: ChannelNotificationAudience.ALL_AND_PERSONALIZED,
+            title: video.isShort ? "New short uploaded" : "New video uploaded",
+            message: `${channelName} uploaded "${video.title}"`,
+            videoId,
+            extraData: {
+              channelName,
+              isShort: video.isShort,
+              videoTitle: video.title,
+            },
+          });
+        } catch (notificationError) {
+          console.error(
+            "Notification dispatch failed (worker):",
+            notificationError?.message || notificationError
+          );
+        }
 
         console.log("Background processing completed:", videoId);
         return true;
@@ -178,7 +222,13 @@ export const startVideoWorker = async ({ force = false } = {}) => {
   );
 
   workerInstance.on("error", (err) => {
-    console.error("Video worker runtime error:", err?.message || err);
+    const message = err?.message || String(err);
+    if (isTransientRedisError(err)) {
+      console.warn("Video worker transient runtime error:", message);
+      return;
+    }
+
+    console.error("Video worker runtime error:", message);
   });
 
   workerInstance.on("active", () => {

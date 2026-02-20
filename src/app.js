@@ -23,6 +23,7 @@ import settingRouter from "./routes/settings.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import uploadRouter from "./routes/upload.routes.js";
 import mediaRoutes from "./routes/media.routes.js";
+import { normalizeOrigin, parseAllowedOrigins } from "./config/cors.config.js";
 
 import passport from "passport";
 import "./config/passport.js";
@@ -30,18 +31,13 @@ import "./config/passport.js";
 const app = express();
 
 app.set("trust proxy", 1);
-
+app.disable("x-powered-by");
 
 /* ---------- GLOBAL MIDDLEWARE ---------- */
 app.use(helmet());
 
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map(o => o.replace(/\/$/, ""))
-  : [
-    "http://localhost:5173",
-    "https://vixora-app.vercel.app",
-    "https://app.vixora.co.in"
-  ];
+const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN);
+app.set("allowedOrigins", allowedOrigins);
 
 
 app.use(
@@ -49,12 +45,14 @@ app.use(
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
 
-      const normalizedOrigin = origin.replace(/\/$/, "");
+      const normalizedOrigin = normalizeOrigin(origin);
 
       if (allowedOrigins.includes(normalizedOrigin)) {
         callback(null, true);
       } else {
-        callback(new Error("Not allowed by CORS"));
+        const corsError = new Error("Not allowed by CORS");
+        corsError.statusCode = 403;
+        callback(corsError);
       }
     },
     credentials: true,
@@ -98,7 +96,7 @@ app.use("/api/v1/feed", feedRouter);
 app.use("/api/v1/settings", settingRouter);
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/upload", uploadRouter);
-app.use("/api/media", mediaRoutes);
+app.use("/api/v1/media", mediaRoutes);
 
 
 app.get("/", (req, res) => {
