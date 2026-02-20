@@ -83,6 +83,17 @@ const GREETING_PATTERNS = [
   /^thanks?(\s+you)?$/i,
   /^ok(ay)?$/i,
 ];
+const CONTEXT_SOURCE_QUESTION_PATTERNS = [
+  /\bdo you watch\b/i,
+  /\bdid you watch\b/i,
+  /\bhave you watched\b/i,
+  /\bwatched this video\b/i,
+  /\bdo you access\b/i,
+  /\bdid you access\b/i,
+  /\bhow do you know\b/i,
+  /\bwhat context\b/i,
+  /\bwhere did you get\b/i,
+];
 
 const isGreetingOrSmallTalk = (value) => {
   const text = normalizeText(value);
@@ -92,6 +103,12 @@ const isGreetingOrSmallTalk = (value) => {
   }
 
   return false;
+};
+
+const isContextSourceQuestion = (value) => {
+  const text = normalizeText(value);
+  if (!text) return false;
+  return CONTEXT_SOURCE_QUESTION_PATTERNS.some((pattern) => pattern.test(text));
 };
 
 const buildChatContextMeta = ({ video, transcriptText }) => {
@@ -128,6 +145,22 @@ const buildSmallTalkReply = ({ video, contextMeta }) => {
     video.title,
     80
   )}".`;
+};
+
+const buildContextSourceReply = ({ video, contextMeta }) => {
+  const source =
+    contextMeta?.hasTranscript
+      ? "transcript + metadata (title/description/summary)"
+      : "metadata (title/description/summary)";
+
+  if (!video) {
+    return "I answer using the context provided in Vixora chat and platform data, not by directly watching raw video frames.";
+  }
+
+  return `I answer based on ${source} for "${trimTo(
+    video.title,
+    80
+  )}". I do not directly watch raw video frames like a human viewer.`;
 };
 
 const buildVideoContextText = ({
@@ -314,6 +347,8 @@ const buildAiReplyPrompt = ({
     "",
     "Answer clearly and naturally.",
     "If user sends greeting/small-talk, respond briefly and friendly.",
+    'Never use boilerplate phrasing like "As an AI, I don\'t watch videos like a human".',
+    "If user asks about context source, explain briefly that answers come from transcript/metadata available in this session.",
     "For video questions, use provided context; when missing, give best-effort answer and clearly mark uncertainty.",
   ].join("\n");
 };
@@ -584,6 +619,68 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     );
   }
 
+  if (video && isContextSourceQuestion(message)) {
+    const replyText = buildContextSourceReply({ video, contextMeta });
+
+    const created = await prisma.$transaction(async (tx) => {
+      const userMessage = await tx.aIChatMessage.create({
+        data: {
+          sessionId,
+          role: "USER",
+          content: message,
+        },
+        select: {
+          id: true,
+          role: true,
+          content: true,
+          createdAt: true,
+        },
+      });
+
+      const assistantMessage = await tx.aIChatMessage.create({
+        data: {
+          sessionId,
+          role: "ASSISTANT",
+          content: replyText,
+        },
+        select: {
+          id: true,
+          role: true,
+          content: true,
+          createdAt: true,
+        },
+      });
+
+      await tx.aIChatSession.update({
+        where: { id: sessionId },
+        data: { updatedAt: new Date() },
+      });
+
+      return { userMessage, assistantMessage };
+    });
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          sessionId,
+          userMessage: toClientMessage(created.userMessage),
+          assistantMessage: toClientMessage(created.assistantMessage),
+          reply: created.assistantMessage?.content || "",
+          answer: created.assistantMessage?.content || "",
+          context: contextMeta,
+          ai: {
+            provider: "rule-based",
+            model: "none",
+            warning: null,
+            quota: null,
+          },
+        },
+        "AI response generated"
+      )
+    );
+  }
+
   const quota = await ensureAiDailyQuota(userId);
 
   const videoContextText = video
@@ -594,7 +691,7 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     : "No specific video context. Assist user with platform guidance and concise answers.";
 
   const systemInstruction = video
-    ? "You are Vixora video assistant. Be natural and concise. For greetings, reply friendly. For video questions, use available context. If transcript/context is weak, give a best-effort answer and clearly mark uncertainty instead of refusing abruptly."
+    ? "You are Vixora video assistant. Be natural and concise. For greetings, reply friendly. For video questions, use available context. If transcript/context is weak, give a best-effort answer and clearly mark uncertainty instead of refusing abruptly. Do not use generic boilerplate like 'As an AI, I do not watch videos like a human'."
     : "You are Vixora platform assistant. Help with uploads, playback, account, and creator workflows.";
 
   const userPrompt = buildAiReplyPrompt({
@@ -1061,6 +1158,29 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
     );
   }
 
+  if (isContextSourceQuestion(question)) {
+    const answerText = buildContextSourceReply({ video, contextMeta });
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          videoId: video.id,
+          question,
+          answer: answerText,
+          reply: answerText,
+          context: contextMeta,
+          ai: {
+            provider: "rule-based",
+            model: "none",
+            warning: null,
+            quota: null,
+          },
+        },
+        "AI answer generated"
+      )
+    );
+  }
+
   const quota = await ensureAiDailyQuota(userId);
 
   const videoContextText = buildVideoContextText({
@@ -1086,7 +1206,7 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
 
   const aiResult = await generateAiText({
     systemInstruction:
-      "You are a helpful video Q&A assistant. Keep answers clear, practical, and beginner-friendly. Stay grounded in provided context and mark uncertainty briefly when context is weak.",
+      "You are a helpful video Q&A assistant. Keep answers clear, practical, and beginner-friendly. Stay grounded in provided context and mark uncertainty briefly when context is weak. Do not use phrases like 'As an AI I cannot watch videos'; instead say answers are based on available transcript/metadata.",
     userPrompt: prompt,
     temperature: 0.3,
     maxOutputTokens: 400,
