@@ -38,7 +38,11 @@ const shouldRunWorkerOnDemand = parseBool(
   process.env.RUN_WORKER_ON_DEMAND,
   cleanEnv(process.env.NODE_ENV) === "production"
 );
-const shouldUseRedisQueue = shouldRunWorker || shouldRunWorkerOnDemand;
+const isQueueEnabled = parseBool(
+  process.env.QUEUE_ENABLED,
+  shouldRunWorker || shouldRunWorkerOnDemand
+);
+const shouldUseRedisQueue = isQueueEnabled;
 const shouldUseRedis = shouldUseRedisQueue || isCacheEnabled;
 const REDIS_ERROR_LOG_COOLDOWN_MS = Number(process.env.REDIS_ERROR_LOG_COOLDOWN_MS || 30000);
 
@@ -172,4 +176,4 @@ export const closeRedisConnection = async () => {
   console.log("Redis connection closed.");
 };
 
-export { isRedisEnabled, isCacheEnabled };
+export { isRedisEnabled, isCacheEnabled, isQueueEnabled };

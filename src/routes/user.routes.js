@@ -21,7 +21,10 @@ import {
     resendOtp,
     changeEmailRequest,
     confirmEmailChange,
-    cancelEmailChange
+    cancelEmailChange,
+    getAccountSwitchToken,
+    switchAccount,
+    resolveAccountSwitchTokens
 } from "../controllers/user.controller.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 import { authLimiter, otpLimiter } from "../middlewares/rateLimit.middleware.js";
@@ -36,6 +39,9 @@ router.route("/logout").post(verifyJwt, logOutUser)
 router.route("/refresh-token").post(authLimiter, refreshAccessToken);
 
 router.route("/current-user").get(verifyJwt, getCurrentUser)
+router.route("/account-switch-token").get(verifyJwt, getAccountSwitchToken)
+router.route("/switch-account").post(verifyJwt, switchAccount)
+router.route("/switch-account/resolve").post(verifyJwt, resolveAccountSwitchTokens)
 
 router.route("/forgot-password").post(otpLimiter, forgotPasswordRequest)
 router.route("/forgot-password/verify").post(otpLimiter, forgotPasswordVerify)

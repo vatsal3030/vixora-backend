@@ -31,3 +31,14 @@ export const otpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+
+export const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: {
+    success: false,
+    message: "Too many AI requests, please try again later."
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});

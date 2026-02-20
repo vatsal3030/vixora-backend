@@ -7,6 +7,11 @@ import crypto from "crypto";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
 import {
+    buildVideoStreamingPayload,
+    normalizeAvailableQualities,
+} from "../utils/videoQuality.js";
+import { parseTranscriptInput } from "../utils/transcript.js";
+import {
     ChannelNotificationAudience,
     dispatchChannelActivityNotification,
 } from "../services/notification.service.js";
@@ -16,6 +21,7 @@ const MAX_UPLOAD_FILENAME_LENGTH = 255;
 const MAX_UPLOAD_MIMETYPE_LENGTH = 100;
 const MAX_VIDEO_TITLE_LENGTH = 120;
 const MAX_VIDEO_DESCRIPTION_LENGTH = 5000;
+const MAX_TRANSCRIPT_INPUT_CHARS = 120000;
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 30;
 const DEFAULT_UPLOAD_SESSION_TTL_MINUTES = 120;
@@ -37,6 +43,7 @@ const ALLOWED_SIGNATURE_RESOURCE_TYPES = new Set([
     "cover",
     "coverimage",
 ]);
+const ALLOWED_TRANSCRIPT_SOURCES = new Set(["MANUAL", "AUTO", "IMPORTED"]);
 
 const normalizeText = (value) => String(value ?? "").trim();
 
@@ -108,6 +115,12 @@ const normalizeTags = (rawTags) => {
     return normalized;
 };
 
+const normalizeTranscriptSource = (rawSource) => {
+    const source = normalizeText(rawSource).toUpperCase();
+    if (!source) return "IMPORTED";
+    return ALLOWED_TRANSCRIPT_SOURCES.has(source) ? source : "IMPORTED";
+};
+
 const normalizeUploadSessionType = (rawType, normalizedMimeType) => {
     const requestedType = normalizeText(rawType).toLowerCase();
 
@@ -164,6 +177,8 @@ const processVideoWithoutQueue = async (videoId) => {
             select: {
                 thumbnail: true,
                 videoFile: true,
+                playbackUrl: true,
+                availableQualities: true,
                 title: true,
                 isShort: true,
                 ownerId: true,
@@ -190,6 +205,12 @@ const processVideoWithoutQueue = async (videoId) => {
             }
         }
 
+        const streaming = buildVideoStreamingPayload({
+            sourceUrl: video.videoFile,
+            playbackUrl: video.playbackUrl,
+            availableQualities: video.availableQualities,
+        });
+
         await prisma.video.update({
             where: { id: videoId },
             data: {
@@ -199,6 +220,9 @@ const processVideoWithoutQueue = async (videoId) => {
                 processingStep: "DONE",
                 isPublished: true,
                 isHlsReady: true,
+                playbackUrl: streaming.selectedPlaybackUrl,
+                masterPlaylistUrl: streaming.masterPlaylistUrl,
+                availableQualities: streaming.availableQualities,
             },
         });
 
@@ -486,6 +510,15 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
     const height = normalizeNumberOrNull(req.body?.height);
     const tags = normalizeTags(req.body?.tags);
     const isShort = req.body?.isShort ?? false;
+    const transcriptInput = req.body?.transcript ?? req.body?.transcriptText ?? "";
+    const transcriptCuesInput =
+        req.body?.transcriptCues ?? req.body?.cues ?? req.body?.segments ?? null;
+    const transcriptLanguage = normalizeText(
+        req.body?.transcriptLanguage ?? req.body?.language ?? ""
+    ) || null;
+    const transcriptSource = normalizeTranscriptSource(
+        req.body?.transcriptSource ?? req.body?.source
+    );
 
     if (
         !rawTitle ||
@@ -506,6 +539,13 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
 
     if (publicId.length > 300 || thumbnailPublicId.length > 300) {
         throw new ApiError(400, "Invalid public ID length");
+    }
+
+    if (normalizeText(transcriptInput).length > MAX_TRANSCRIPT_INPUT_CHARS) {
+        throw new ApiError(
+            400,
+            `transcript too long (max ${MAX_TRANSCRIPT_INPUT_CHARS})`
+        );
     }
 
     const session = await prisma.uploadSession.findUnique({
@@ -567,6 +607,7 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
     // ✅ TRUST CLOUDINARY RESPONSE ONLY
     const safeVideoUrl = videoResource.secure_url;
     const safeThumbUrl = thumbResource.secure_url;
+    const sourceHeight = Number(videoResource?.height || height || 0);
 
     if (!safeVideoUrl || !safeThumbUrl) {
         throw new ApiError(500, "Cloudinary returned invalid media metadata");
@@ -595,9 +636,14 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
         /* ---------- SAFE PLAYBACK URL ---------- */
 
         const cloudinaryPlaybackUrl =
-            safeVideoUrl?.includes("/upload/")
-                ? safeVideoUrl.replace("/upload/", "/upload/sp_auto/")
-                : safeVideoUrl;
+            buildVideoStreamingPayload({
+                sourceUrl: safeVideoUrl,
+                playbackUrl: null,
+                availableQualities: normalizeAvailableQualities([], sourceHeight),
+                sourceHeight,
+            }).masterPlaylistUrl || safeVideoUrl;
+
+        const availableQualities = normalizeAvailableQualities([], sourceHeight);
 
         const newVideo = await tx.video.create({
             data: {
@@ -611,6 +657,8 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
 
                 videoFile: safeVideoUrl,
                 playbackUrl: cloudinaryPlaybackUrl,
+                masterPlaylistUrl: cloudinaryPlaybackUrl,
+                availableQualities,
 
                 videoPublicId: publicId,
 
@@ -625,6 +673,50 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
                 isHlsReady: false,
             }
         });
+
+        const hasTranscriptInput =
+            Boolean(normalizeText(transcriptInput)) ||
+            (Array.isArray(transcriptCuesInput) && transcriptCuesInput.length > 0);
+
+        if (hasTranscriptInput) {
+            const parsedTranscript = parseTranscriptInput({
+                transcript: transcriptInput,
+                cues: transcriptCuesInput,
+                durationSeconds: newVideo.duration || duration || null,
+            });
+
+            if (!parsedTranscript.transcriptText) {
+                throw new ApiError(400, "Invalid transcript input");
+            }
+
+            if (parsedTranscript.transcriptText.length > MAX_TRANSCRIPT_INPUT_CHARS) {
+                throw new ApiError(
+                    400,
+                    `transcript too long (max ${MAX_TRANSCRIPT_INPUT_CHARS})`
+                );
+            }
+
+            await tx.videoTranscript.upsert({
+                where: { videoId: newVideo.id },
+                update: {
+                    transcript: parsedTranscript.transcriptText,
+                    segments: parsedTranscript.segments,
+                    language: transcriptLanguage,
+                    source: transcriptSource,
+                    wordCount: parsedTranscript.wordCount,
+                    generatedAt: new Date(),
+                },
+                create: {
+                    videoId: newVideo.id,
+                    transcript: parsedTranscript.transcriptText,
+                    segments: parsedTranscript.segments,
+                    language: transcriptLanguage,
+                    source: transcriptSource,
+                    wordCount: parsedTranscript.wordCount,
+                    generatedAt: new Date(),
+                },
+            });
+        }
 
         if (tagRecords.length > 0) {
             await tx.videoTag.createMany({

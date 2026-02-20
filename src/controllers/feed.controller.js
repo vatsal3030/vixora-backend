@@ -21,6 +21,7 @@ const BASE_AVAILABLE_VIDEO_WHERE = Object.freeze({
 
 const MAX_PERSONALIZATION_HISTORY_ROWS = 300;
 const MAX_INTERESTED_TAG_IDS = 100;
+const MAX_SUPPRESSION_ROWS = 1000;
 
 const buildBaseFeedVideoWhere = (extra = {}) => ({
     ...BASE_AVAILABLE_VIDEO_WHERE,
@@ -66,6 +67,52 @@ const parseBooleanQuery = (value) => {
     if (normalized === "false") return false;
 
     return undefined;
+};
+
+const getSuppressionFilterForUser = async (userId) => {
+    if (!userId) {
+        return {
+            whereExtra: {},
+            blockedChannelIds: [],
+            notInterestedVideoIds: [],
+        };
+    }
+
+    const [notInterestedRows, blockedChannelRows] = await Promise.all([
+        prisma.notInterested.findMany({
+            where: { userId },
+            take: MAX_SUPPRESSION_ROWS,
+            orderBy: { createdAt: "desc" },
+            select: { videoId: true },
+        }),
+        prisma.blockedChannel.findMany({
+            where: { userId },
+            take: MAX_SUPPRESSION_ROWS,
+            orderBy: { createdAt: "desc" },
+            select: { channelId: true },
+        }),
+    ]);
+
+    const notInterestedVideoIds = [
+        ...new Set(notInterestedRows.map((row) => row.videoId).filter(Boolean)),
+    ];
+    const blockedChannelIds = [
+        ...new Set(blockedChannelRows.map((row) => row.channelId).filter(Boolean)),
+    ];
+
+    const NOT = [];
+    if (notInterestedVideoIds.length > 0) {
+        NOT.push({ id: { in: notInterestedVideoIds } });
+    }
+    if (blockedChannelIds.length > 0) {
+        NOT.push({ ownerId: { in: blockedChannelIds } });
+    }
+
+    return {
+        whereExtra: NOT.length > 0 ? { NOT } : {},
+        blockedChannelIds,
+        notInterestedVideoIds,
+    };
 };
 
 
@@ -167,7 +214,8 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // -------------------------------
     // Base filter
     // -------------------------------
-    const whereClause = buildBaseFeedVideoWhere();
+    const suppression = await getSuppressionFilterForUser(userId);
+    const whereClause = buildBaseFeedVideoWhere(suppression.whereExtra);
 
     // -------------------------------
     // Fetch videos
@@ -177,7 +225,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
         where: {
             userId,
             video: {
-                is: buildBaseFeedVideoWhere()
+                is: buildBaseFeedVideoWhere(suppression.whereExtra)
             }
         },
         orderBy: {
@@ -205,7 +253,12 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
         where: {
             subscriberId: userId,
             channel: {
-                isDeleted: false
+                isDeleted: false,
+                ...(suppression.blockedChannelIds.length > 0 && {
+                    id: {
+                        notIn: suppression.blockedChannelIds,
+                    },
+                }),
             }
         },
         select: { channelId: true }
@@ -285,7 +338,9 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
         extra: {
             filters: {
                 sortBy,
-                sortType
+                sortType,
+                blockedChannels: suppression.blockedChannelIds.length,
+                hiddenVideos: suppression.notInterestedVideoIds.length,
             }
         }
     });
@@ -347,11 +402,18 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
     }
 
     // 1️⃣ Get subscribed channels
+    const suppression = await getSuppressionFilterForUser(userId);
+
     const subscriptions = await prisma.subscription.findMany({
         where: {
             subscriberId: userId,
             channel: {
-                isDeleted: false
+                isDeleted: false,
+                ...(suppression.blockedChannelIds.length > 0 && {
+                    id: {
+                        notIn: suppression.blockedChannelIds,
+                    },
+                }),
             }
         },
         select: { channelId: true }
@@ -389,6 +451,7 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
     // 2️⃣ Build video filter
     const videoWhere = buildBaseFeedVideoWhere({
         ownerId: { in: channelIds },
+        ...suppression.whereExtra,
         ...(isShortFilter !== undefined && { isShort: isShortFilter })
     });
 
@@ -431,7 +494,9 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         totalItems: totalVideos,
         extra: {
             filters: {
-                isShort: isShortFilter ?? null
+                isShort: isShortFilter ?? null,
+                blockedChannels: suppression.blockedChannelIds.length,
+                hiddenVideos: suppression.notInterestedVideoIds.length,
             }
         }
     });
@@ -507,10 +572,14 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
         }
     }
 
+    const userId = req.user?.id || null;
+    const suppression = await getSuppressionFilterForUser(userId);
+
     // --------------------------
     // Where clause
     // --------------------------
     const whereClause = buildBaseFeedVideoWhere({
+        ...suppression.whereExtra,
         ...(isShortFilter !== undefined && { isShort: isShortFilter })
     });
 
@@ -559,7 +628,9 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
             filters: {
                 isShort: isShortFilter ?? null,
                 sortBy,
-                sortType
+                sortType,
+                blockedChannels: suppression.blockedChannelIds.length,
+                hiddenVideos: suppression.notInterestedVideoIds.length,
             }
         }
     });
@@ -614,9 +685,12 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
             ? Math.min(parsedCommentsLimit, 10)
             : 5;
 
+    const suppression = await getSuppressionFilterForUser(userId);
+
     // Fetch shorts
     const shorts = await prisma.video.findMany({
         where: buildBaseFeedVideoWhere({
+            ...suppression.whereExtra,
             isShort: true,
         }),
         orderBy:
@@ -696,6 +770,7 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
     // Count for pagination
     const totalShorts = await prisma.video.count({
         where: buildBaseFeedVideoWhere({
+            ...suppression.whereExtra,
             isShort: true
         })
     });
@@ -713,7 +788,9 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                         sortBy,
                         sortType,
                         includeComments: includeCommentsFlag,
-                        commentsLimit: includeCommentsFlag ? safeCommentsLimit : 0
+                        commentsLimit: includeCommentsFlag ? safeCommentsLimit : 0,
+                        blockedChannels: suppression.blockedChannelIds.length,
+                        hiddenVideos: suppression.notInterestedVideoIds.length,
                     }
                 }
             }),

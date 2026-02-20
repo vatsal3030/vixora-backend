@@ -505,7 +505,11 @@ model VideoTranscript {
   id         String   @id @default(uuid())
   videoId    String   @unique
   transcript String
+  segments   Json?
   language   String?
+  source     String?  @default("MANUAL")
+  wordCount  Int?
+  generatedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)

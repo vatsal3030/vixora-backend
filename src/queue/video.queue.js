@@ -14,7 +14,11 @@ const shouldRunWorkerOnDemand = parseBool(
   process.env.RUN_WORKER_ON_DEMAND,
   process.env.NODE_ENV === "production"
 );
-const shouldUseQueue = shouldRunWorker || shouldRunWorkerOnDemand;
+const queueEnabled = parseBool(
+  process.env.QUEUE_ENABLED,
+  shouldRunWorker || shouldRunWorkerOnDemand
+);
+const shouldUseQueue = queueEnabled;
 
 const skipVersionCheck = parseBool(
   process.env.BULLMQ_SKIP_VERSION_CHECK,

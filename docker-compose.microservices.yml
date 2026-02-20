@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm start
+    env_file:
+      - .env
+    environment:
+      QUEUE_ENABLED: "true"
+      RUN_WORKER: "false"
+      RUN_SCHEDULER: "false"
+      RUN_WORKER_ON_DEMAND: "false"
+    ports:
+      - "10000:10000"
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm start
+    env_file:
+      - .env
+    environment:
+      QUEUE_ENABLED: "true"
+      RUN_WORKER: "true"
+      RUN_SCHEDULER: "false"
+      RUN_WORKER_ON_DEMAND: "false"
+    depends_on:
+      - redis
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm start
+    env_file:
+      - .env
+    environment:
+      QUEUE_ENABLED: "false"
+      RUN_WORKER: "false"
+      RUN_SCHEDULER: "true"
+      RUN_WORKER_ON_DEMAND: "false"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6379:6379"

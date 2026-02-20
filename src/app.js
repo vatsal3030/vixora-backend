@@ -23,6 +23,8 @@ import settingRouter from "./routes/settings.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import uploadRouter from "./routes/upload.routes.js";
 import mediaRoutes from "./routes/media.routes.js";
+import aiRoutes from "./routes/ai.routes.js";
+import feedbackRoutes from "./routes/feedback.routes.js";
 import { normalizeOrigin, parseAllowedOrigins } from "./config/cors.config.js";
 
 import passport from "passport";
@@ -97,6 +99,8 @@ app.use("/api/v1/settings", settingRouter);
 app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/upload", uploadRouter);
 app.use("/api/v1/media", mediaRoutes);
+app.use("/api/v1/ai", aiRoutes);
+app.use("/api/v1/feedback", feedbackRoutes);
 
 
 app.get("/", (req, res) => {

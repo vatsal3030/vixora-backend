@@ -188,6 +188,12 @@ Notes:
   "width": 1920,
   "height": 1080,
   "isShort": false,
+  "transcriptLanguage": "en",
+  "transcriptSource": "IMPORTED",
+  "transcript": "Optional plain text or SRT/VTT transcript",
+  "transcriptCues": [
+    { "startMs": 0, "endMs": 2500, "text": "Intro line" }
+  ],
   "tags": ["news", "daily"]
 }
 ```
@@ -198,6 +204,8 @@ Backend behavior on finalize:
 - Accepts optional `isShort` (`true`/`false`)
 - Verifies uploaded assets belong to current user folder
 - Uses Cloudinary verified URLs (not blindly trusting client URL)
+- Creates quality profile (`availableQualities`) based on source metadata
+- Optional transcript payload is accepted and saved (`transcript` or `transcriptCues`)
 - Creates DB video row with `processingStatus = PENDING`
 - Marks upload session `COMPLETED`
 - Enqueues background processing job
@@ -206,6 +214,27 @@ Backend behavior on finalize:
 
 - Poll status: `GET /api/v1/videos/:videoId/processing-status` (auth)
 - Publish when ready: `PATCH /api/v1/videos/:videoId/publish` (auth)
+
+#### Step G: Playback quality selection (YouTube-like)
+
+- Public watch payload: `GET /api/v1/watch/:videoId?quality=auto|max|1080p|720p|480p|360p|240p|144p`
+- Optional stream-only endpoint: `GET /api/v1/watch/:videoId/stream?quality=...`
+- Auth detail payload also supports quality query:
+  - `GET /api/v1/videos/:videoId?quality=...`
+
+Playback response contains:
+
+- `playbackUrl` (already resolved to selected quality)
+- `selectedQuality`
+- `availableQualities` (includes `AUTO`, `MAX`, then manual qualities)
+- `qualityUrls` (quality => direct URL map)
+- `streaming` object with `defaultQuality`, `selectedQuality`, `selectedPlaybackUrl`, `masterPlaylistUrl`, `availableQualities`
+
+Important behavior:
+
+- `GET /watch/:videoId` increments views for non-owner users.
+- `GET /watch/:videoId/stream` is stream metadata only and does not increment views.
+- For quality switches after initial watch load, frontend should call `/watch/:videoId/stream?quality=...`.
 
 Processing status enums:
 
@@ -383,6 +412,17 @@ Base: `/api/v1/users`
 | POST | `/change-email/request` | Yes | `{ email }` |
 | POST | `/change-email/confirm` | Yes | `{ otp }` |
 | POST | `/change-email/cancel` | Yes | none |
+| GET | `/account-switch-token` | Yes | none |
+| POST | `/switch-account` | Yes | `{ accountSwitchToken }` |
+| POST | `/switch-account/resolve` | Yes | `{ tokens: string[] }` |
+
+Auth response additions:
+
+- `POST /users/login` and `POST /users/refresh-token` now return:
+  - `data.user`
+  - `data.accountSwitch.accountSwitchToken`
+  - `data.accountSwitch.account`
+- Use `accountSwitchToken` to implement multi-account switch without logging out.
 
 ## Upload
 
@@ -425,7 +465,7 @@ Base: `/api/v1/videos` (all protected)
 | PATCH | `/:videoId/cancel-processing` | none |
 | PATCH | `/:videoId/publish` | none |
 | PATCH | `/:videoId/restore` | none |
-| GET | `/:videoId` | none |
+| GET | `/:videoId` | query (optional): `quality=auto|max|1080p|720p|480p|360p|240p|144p` |
 | PATCH | `/:videoId` | body: `{ title?, description? }` |
 | DELETE | `/:videoId` | none |
 
@@ -437,7 +477,15 @@ Base: `/api/v1/watch`
 
 | Method | Endpoint | Auth | Purpose |
 |---|---|---|---|
-| GET | `/:videoId` | No (optional token supported) | Public watch payload + increments views |
+| GET | `/:videoId` | No (optional token supported) | Public watch payload + increments views + quality selection |
+| GET | `/:videoId/stream` | No (optional token supported) | Stream payload only (quality URLs + selected quality, no view increment) |
+| GET | `/:videoId/transcript` | No (optional token supported) | Transcript payload with segments + search + time filters |
+
+Transcript query params:
+
+- `q` (text contains filter)
+- `from` / `to` (timestamp like `00:01:15.200`) OR `fromSeconds` / `toSeconds` (number)
+- `page`, `limit` (default `50`, max `200`)
 
 ## Feed
 
@@ -453,7 +501,202 @@ Base: `/api/v1/feed`
 Feed notes:
 
 - Feed endpoints exclude videos from soft-deleted channels.
+- Feed endpoints also suppress:
+  - `not interested` videos selected by user
+  - videos from blocked channels (`don't recommend this channel`)
 - `/shorts` defaults to include comments (`includeComments=true`, `commentsLimit=5`, max `10`).
+
+## AI Assistant
+
+Base: `/api/v1/ai` (protected)
+
+| Method | Endpoint | Request |
+|---|---|---|
+| POST | `/sessions` | body: `{ videoId?, title? }` |
+| GET | `/sessions` | query: `page,limit` |
+| GET | `/sessions/:sessionId/messages` | query: `page,limit` |
+| POST | `/sessions/:sessionId/messages` | body: `{ message }` |
+| GET | `/videos/:videoId/summary` | none |
+| POST | `/videos/:videoId/summary` | body: `{ force? }` |
+| POST | `/videos/:videoId/ask` | body: `{ question }` |
+| GET | `/videos/:videoId/transcript` | query: `q,from,to,fromSeconds,toSeconds,page,limit` |
+| POST | `/videos/:videoId/transcript` | body: `{ transcript, language? }` (owner only) |
+| DELETE | `/videos/:videoId/transcript` | none (owner only) |
+
+AI notes:
+
+- Uses Gemini when `GEMINI_API_KEY` is configured.
+- Safe fallback responses are returned when AI provider is unavailable.
+- Daily cap enforced per user (`AI_DAILY_MESSAGE_LIMIT`, default `40`).
+- Session/chat data persists in DB (`AIChatSession`, `AIChatMessage`).
+- Responses now include `data.context` with context health:
+  - `hasTranscript`, `transcriptChars`, `hasDescription`, `hasSummary`, `quality` (`RICH|LIMITED|MINIMAL`)
+- Greeting/small-talk may return `data.ai.provider = "rule-based"` (does not call Gemini).
+- For strong video Q&A quality, provide transcript text using:
+  - `POST /api/v1/ai/videos/:videoId/transcript`
+  - body example: `{ "transcript": "...full transcript text...", "language": "en" }`
+- Transcript endpoint accepts:
+  - plain text (`transcript`)
+  - SRT/VTT text (`transcript`)
+  - timed cues array (`cues` / `segments` / `transcriptCues`)
+    - each cue can include `startMs/endMs` or `start/end`, plus `text`
+
+### AI response contract (important for UI binding)
+
+#### 1) Send chat message
+
+Endpoint:
+
+- `POST /api/v1/ai/sessions/:sessionId/messages`
+- body: `{ "message": "..." }`
+
+Response `data`:
+
+```json
+{
+  "sessionId": "uuid",
+  "userMessage": {
+    "id": "uuid",
+    "role": "USER",
+    "roleLower": "user",
+    "content": "hello",
+    "text": "hello",
+    "message": "hello",
+    "createdAt": "2026-02-20T10:00:00.000Z"
+  },
+  "assistantMessage": {
+    "id": "uuid",
+    "role": "ASSISTANT",
+    "roleLower": "assistant",
+    "content": "Hi! How can I help?",
+    "text": "Hi! How can I help?",
+    "message": "Hi! How can I help?",
+    "createdAt": "2026-02-20T10:00:00.500Z"
+  },
+  "reply": "Hi! How can I help?",
+  "answer": "Hi! How can I help?",
+  "context": {
+    "hasTranscript": false,
+    "transcriptChars": 0,
+    "hasDescription": true,
+    "hasSummary": false,
+    "quality": "LIMITED"
+  },
+  "ai": {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "warning": null,
+    "quota": {
+      "usedToday": 3,
+      "dailyLimit": 40,
+      "remaining": 37
+    }
+  }
+}
+```
+
+Frontend should display AI text from:
+
+1. `data.reply` (recommended primary)
+2. fallback: `data.assistantMessage.text`
+3. fallback: `data.assistantMessage.message`
+4. fallback: `data.assistantMessage.content`
+
+#### 2) Fetch session messages
+
+Endpoint:
+
+- `GET /api/v1/ai/sessions/:sessionId/messages?page=1&limit=50`
+
+Response list item shape (`data.items[]`):
+
+```json
+{
+  "id": "uuid",
+  "role": "USER",
+  "roleLower": "user",
+  "content": "hello",
+  "text": "hello",
+  "message": "hello",
+  "tokensUsed": null,
+  "createdAt": "2026-02-20T10:00:00.000Z"
+}
+```
+
+Use `roleLower` directly for message side mapping.
+
+#### 3) Ask video question
+
+Endpoint:
+
+- `POST /api/v1/ai/videos/:videoId/ask`
+- body: `{ "question": "What is the main topic?" }`
+
+Response `data` includes both:
+
+- `answer`
+- `reply` (alias, same value)
+- `context` (context quality metadata)
+
+#### 4) Generate summary
+
+Endpoint:
+
+- `POST /api/v1/ai/videos/:videoId/summary`
+
+Response `data`:
+
+- `summary`
+- `source` (`gemini` or `fallback`)
+- `model`
+- `quota`
+
+#### 5) Transcript read/update/delete
+
+- `GET /api/v1/ai/videos/:videoId/transcript`
+  - returns normalized timed `items[]` segments and full `transcript`
+- `POST /api/v1/ai/videos/:videoId/transcript`
+  - owner-only upsert
+  - body examples:
+```json
+{
+  "transcript": "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello everyone",
+  "language": "en",
+  "source": "IMPORTED"
+}
+```
+```json
+{
+  "language": "en",
+  "cues": [
+    { "startMs": 1200, "endMs": 4200, "text": "Hello everyone" },
+    { "startMs": 4300, "endMs": 7800, "text": "Welcome to the video" }
+  ]
+}
+```
+- `DELETE /api/v1/ai/videos/:videoId/transcript`
+  - owner-only delete transcript
+
+## Feedback
+
+Base: `/api/v1/feedback` (protected)
+
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/not-interested` | query: `page,limit` |
+| POST | `/not-interested/:videoId` | body: `{ reason? }` |
+| DELETE | `/not-interested/:videoId` | none |
+| GET | `/blocked-channels` | query: `page,limit` |
+| POST | `/blocked-channels/:channelId` | none |
+| DELETE | `/blocked-channels/:channelId` | none |
+| POST | `/reports` | body: `{ targetType, targetId, reason, description? }` |
+| GET | `/reports/me` | query: `page,limit` |
+
+Feedback notes:
+
+- `targetType` for reports: `VIDEO|COMMENT|USER|CHANNEL`
+- duplicate pending report for same target returns existing report instead of creating new
+- report + not-interested actions are logged into `UserEvent`
 
 ## Comments
 
@@ -719,12 +962,17 @@ Watch history notes:
 - Trending: `/api/v1/feed/trending`
 - Shorts: `/api/v1/feed/shorts`
 - Video detail: `/api/v1/videos/:videoId`
-- Public watch page: `/api/v1/watch/:videoId`
+- Public watch page: `/api/v1/watch/:videoId` (+ optional `quality` query)
+- Stream-only load (optional): `/api/v1/watch/:videoId/stream`
+- Transcript panel: `/api/v1/watch/:videoId/transcript` (supports `q`, `from`, `to`, paging)
+- AI assistant/chat: `/api/v1/ai/sessions`, `/api/v1/ai/sessions/:sessionId/messages`, `/api/v1/ai/videos/:videoId/summary`, `/api/v1/ai/videos/:videoId/ask`
 - Upload studio: `/api/v1/upload/session` -> `/api/v1/upload/signature` -> Cloudinary direct upload -> `/api/v1/upload/finalize/:sessionId` -> `/api/v1/videos/:videoId/processing-status` -> `/api/v1/videos/:videoId/publish`
 - Comments panel: `/api/v1/comments/:videoId`, `/api/v1/likes/toggle/c/:commentId`
 - Channel page: `/api/v1/channels/:channelId`, `/about`, `/videos`, `/shorts`, `/playlists`, `/tweets`
 - Playlists + watch later: `/api/v1/playlists/*`
 - Notification bell: `/api/v1/notifications/unread-count`, `/api/v1/notifications`
+- Recommendation controls: `/api/v1/feedback/not-interested/*`, `/api/v1/feedback/blocked-channels/*`, `/api/v1/feedback/reports`
+- Multi-account switch: `/api/v1/users/account-switch-token`, `/api/v1/users/switch-account`
 - Continue watching: `/api/v1/watch-history`, `/api/v1/watch-history/bulk`
 - Creator analytics: `/api/v1/dashboard/*`
 
@@ -734,6 +982,9 @@ Watch history notes:
 - Avatar/Cover update APIs require Cloudinary `publicId`, not file upload multipart.
 - Signature endpoint returns custom `resourceType` labels (`thumbnail`, `avatar`, `post`). For Cloudinary URL path, use `/image/upload` for non-video uploads.
 - Media finalize (`/api/v1/media/finalize/:sessionId`, legacy `/api/media/finalize/:sessionId`) trusts only `publicId` and verifies asset ownership on backend; do not send Cloudinary URL as source of truth.
+- Quality playback supports `AUTO`, `MAX`, and manual levels (`1080p`, `720p`, etc). Use `quality` query param for selection.
+- For account switch, frontend must persist `accountSwitchToken` per account (secure storage policy on frontend side).
+- AI APIs require authenticated user and respect daily quota limits.
 - Folder checks are strict in backend verification:
   - video finalize expects `videos/<userId>` and `thumbnails/<userId>`
   - avatar update expects `avatars/<userId>`

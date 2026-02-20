@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vixora-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vixora-api
+  template:
+    metadata:
+      labels:
+        app: vixora-api
+    spec:
+      containers:
+        - name: api
+          image: your-registry/vixora-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 10000
+          envFrom:
+            - secretRef:
+                name: vixora-env
+          env:
+            - name: QUEUE_ENABLED
+              value: "true"
+            - name: RUN_WORKER
+              value: "false"
+            - name: RUN_SCHEDULER
+              value: "false"
+            - name: RUN_WORKER_ON_DEMAND
+              value: "false"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vixora-api
+spec:
+  selector:
+    app: vixora-api
+  ports:
+    - port: 80
+      targetPort: 10000

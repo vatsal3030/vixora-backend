@@ -14,6 +14,11 @@ import { restoreOtpTemplate, emailVerificationOtpTemplate, welcomeEmailTemplate,
 import { getSecurityContext } from "../utils/securityContext.js";
 import { getCookieOptions } from "../utils/cookieOptions.js";
 import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.js";
+import {
+    createAccountSwitchToken,
+    isAccountSwitchTokenValidForRefreshToken,
+    verifyAccountSwitchToken,
+} from "../utils/accountSwitch.js";
 
 const normalizeEmail = (value) => String(value ?? "").trim().toLowerCase();
 const normalizeUsername = (value) => String(value ?? "").trim();
@@ -53,6 +58,30 @@ const getActiveOtpRemainingSeconds = (user) => {
     const remainingMs = user.otpExpiresAt.getTime() - Date.now();
     return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
 };
+
+const buildSafeUserForAuthResponse = (user) => ({
+    id: user.id,
+    fullName: user.fullName,
+    email: user.email,
+    username: user.username,
+    avatar: user.avatar,
+    coverImage: user.coverImage,
+    createdAt: user.createdAt,
+});
+
+const buildAccountSwitchPayload = ({ user, refreshToken }) => ({
+    accountSwitchToken: createAccountSwitchToken({
+        userId: user.id,
+        refreshToken,
+    }),
+    account: {
+        id: user.id,
+        fullName: user.fullName,
+        email: user.email,
+        username: user.username,
+        avatar: user.avatar,
+    }
+});
 
 const throwIfActiveOtpExists = (user) => {
     const remaining = getActiveOtpRemainingSeconds(user);
@@ -632,6 +661,11 @@ export const loginUser = asyncHandler(async (req, res) => {
         },
     });
 
+    const accountSwitch = buildAccountSwitchPayload({
+        user: loggedInUser,
+        refreshToken,
+    });
+
     const options = getCookieOptions();
 
     return res.
@@ -644,7 +678,7 @@ export const loginUser = asyncHandler(async (req, res) => {
                     200,
                     {
                         user: loggedInUser,
-                        //  refreshToken 
+                        accountSwitch,
                     },
                     "User Logged In Successfully"
                 )
@@ -723,6 +757,12 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
         const { accessToken, refreshToken } =
             await generateAccessAndRefreshToken(user.id);
 
+        const safeUser = buildSafeUserForAuthResponse(user);
+        const accountSwitch = buildAccountSwitchPayload({
+            user: safeUser,
+            refreshToken,
+        });
+
         return res
             .status(200)
             .cookie("accessToken", accessToken, cookieOptions)
@@ -730,7 +770,10 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
             .json(
                 new ApiResponse(
                     200,
-                    {},
+                    {
+                        user: safeUser,
+                        accountSwitch,
+                    },
                     "Access token refreshed successfully"
                 )
             );
@@ -1021,6 +1064,206 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
         json(new ApiResponse(200, req.user, "current user fetched successfully"))
 
 })
+
+export const getAccountSwitchToken = asyncHandler(async (req, res) => {
+    const user = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: {
+            id: true,
+            fullName: true,
+            email: true,
+            username: true,
+            avatar: true,
+            coverImage: true,
+            createdAt: true,
+            isDeleted: true,
+            emailVerified: true,
+            refreshToken: true,
+        },
+    });
+
+    if (!user || user.isDeleted) {
+        throw new ApiError(404, "User not found");
+    }
+
+    if (!user.emailVerified) {
+        throw new ApiError(403, "Email not verified");
+    }
+
+    if (!user.refreshToken) {
+        throw new ApiError(401, "Session expired. Login again.");
+    }
+
+    const safeUser = buildSafeUserForAuthResponse(user);
+    const accountSwitch = buildAccountSwitchPayload({
+        user: safeUser,
+        refreshToken: user.refreshToken,
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, accountSwitch, "Account switch token generated")
+    );
+});
+
+export const switchAccount = asyncHandler(async (req, res) => {
+    const rawToken = String(req.body?.accountSwitchToken || "").trim();
+    if (!rawToken) {
+        throw new ApiError(400, "accountSwitchToken is required");
+    }
+
+    let decodedToken;
+    try {
+        decodedToken = verifyAccountSwitchToken(rawToken);
+    } catch {
+        throw new ApiError(401, "Invalid account switch token");
+    }
+
+    const targetUserId = String(decodedToken?.uid || "").trim();
+    if (!targetUserId) {
+        throw new ApiError(401, "Invalid account switch token");
+    }
+
+    const targetUser = await prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: {
+            id: true,
+            fullName: true,
+            email: true,
+            username: true,
+            avatar: true,
+            coverImage: true,
+            createdAt: true,
+            isDeleted: true,
+            emailVerified: true,
+            refreshToken: true,
+        },
+    });
+
+    if (!targetUser || targetUser.isDeleted) {
+        throw new ApiError(404, "Target account not found");
+    }
+
+    if (!targetUser.emailVerified) {
+        throw new ApiError(403, "Target account email is not verified");
+    }
+
+    if (!targetUser.refreshToken) {
+        throw new ApiError(401, "Target account session expired. Login that account again.");
+    }
+
+    const matches = isAccountSwitchTokenValidForRefreshToken({
+        tokenPayload: decodedToken,
+        refreshToken: targetUser.refreshToken,
+    });
+
+    if (!matches) {
+        throw new ApiError(401, "Account switch token expired");
+    }
+
+    const { accessToken, refreshToken } = await generateAccessAndRefreshToken(targetUser.id);
+    const safeUser = buildSafeUserForAuthResponse(targetUser);
+    const accountSwitch = buildAccountSwitchPayload({
+        user: safeUser,
+        refreshToken,
+    });
+
+    const options = getCookieOptions();
+
+    return res
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(
+                200,
+                {
+                    user: safeUser,
+                    accountSwitch,
+                },
+                "Account switched successfully"
+            )
+        );
+});
+
+export const resolveAccountSwitchTokens = asyncHandler(async (req, res) => {
+    const rawTokens = Array.isArray(req.body?.tokens) ? req.body.tokens : [];
+    const tokens = rawTokens
+        .map((token) => String(token || "").trim())
+        .filter(Boolean)
+        .slice(0, 10);
+
+    if (tokens.length === 0) {
+        return res.status(200).json(
+            new ApiResponse(200, { accounts: [] }, "No tokens to resolve")
+        );
+    }
+
+    const decodedEntries = [];
+    for (const token of tokens) {
+        try {
+            const decoded = verifyAccountSwitchToken(token);
+            const uid = String(decoded?.uid || "").trim();
+            if (!uid) continue;
+            decodedEntries.push({ token, decoded, uid });
+        } catch {
+            // Ignore invalid tokens, return only valid resolvable accounts.
+        }
+    }
+
+    const userIds = [...new Set(decodedEntries.map((entry) => entry.uid))];
+
+    if (userIds.length === 0) {
+        return res.status(200).json(
+            new ApiResponse(200, { accounts: [] }, "No valid account tokens")
+        );
+    }
+
+    const users = await prisma.user.findMany({
+        where: {
+            id: { in: userIds },
+            isDeleted: false,
+            emailVerified: true,
+        },
+        select: {
+            id: true,
+            fullName: true,
+            email: true,
+            username: true,
+            avatar: true,
+            refreshToken: true,
+        },
+    });
+
+    const userMap = new Map(users.map((user) => [user.id, user]));
+    const accounts = [];
+
+    for (const entry of decodedEntries) {
+        const user = userMap.get(entry.uid);
+        if (!user || !user.refreshToken) continue;
+
+        const valid = isAccountSwitchTokenValidForRefreshToken({
+            tokenPayload: entry.decoded,
+            refreshToken: user.refreshToken,
+        });
+
+        if (!valid) continue;
+
+        accounts.push({
+            token: entry.token,
+            user: {
+                id: user.id,
+                fullName: user.fullName,
+                email: user.email,
+                username: user.username,
+                avatar: user.avatar,
+            },
+        });
+    }
+
+    return res.status(200).json(
+        new ApiResponse(200, { accounts }, "Account tokens resolved")
+    );
+});
 
 export const changeEmailRequest = asyncHandler(async (req, res) => {
     let email = normalizeEmail(req.body?.email);

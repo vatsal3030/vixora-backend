@@ -4,6 +4,7 @@ import ApiResponse from "../utils/ApiResponse.js"
 import asyncHandler from "../utils/asyncHandler.js"
 import { getCachedValue, setCachedValue } from "../utils/cache.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
+import { buildVideoStreamingPayload } from "../utils/videoQuality.js";
 import {
     ChannelNotificationAudience,
     dispatchChannelActivityNotification,
@@ -252,6 +253,7 @@ export const getAllVideos = asyncHandler(async (req, res) => {
 
 export const getVideoById = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
+    const { quality } = req.query;
     const userId = req.user?.id || null;
 
     if (!videoId) {
@@ -261,6 +263,7 @@ export const getVideoById = asyncHandler(async (req, res) => {
     const cacheParams = {
         videoId,
         viewerId: userId || "anonymous",
+        quality: String(quality || "auto").toLowerCase(),
     };
 
     const cached = await getCachedValue({
@@ -295,6 +298,7 @@ export const getVideoById = asyncHandler(async (req, res) => {
             views: true,
             createdAt: true,
             playbackUrl: true,
+            masterPlaylistUrl: true,
             availableQualities: true,
             processingProgress: true,
             processingStatus: true,
@@ -330,6 +334,13 @@ export const getVideoById = asyncHandler(async (req, res) => {
                         select: { name: true }
                     }
                 }
+            },
+            transcript: {
+                select: {
+                    language: true,
+                    wordCount: true,
+                    updatedAt: true,
+                },
             }
         }
     });
@@ -386,8 +397,34 @@ export const getVideoById = asyncHandler(async (req, res) => {
             _count: undefined
         },
         tags: video.tags.map(t => t.tag.name),
+        transcript: {
+            hasTranscript: Boolean(video.transcript),
+            language: video.transcript?.language || null,
+            wordCount: video.transcript?.wordCount || 0,
+            updatedAt: video.transcript?.updatedAt || null,
+        },
         _count: undefined,
-        likes: undefined
+        likes: undefined,
+    };
+
+    const streaming = buildVideoStreamingPayload({
+        sourceUrl: video.videoFile,
+        playbackUrl: video.masterPlaylistUrl || video.playbackUrl,
+        availableQualities: video.availableQualities,
+        requestedQuality: quality,
+    });
+
+    formattedVideo.playbackUrl = streaming.selectedPlaybackUrl;
+    formattedVideo.masterPlaylistUrl = streaming.masterPlaylistUrl;
+    formattedVideo.availableQualities = streaming.availableQualities;
+    formattedVideo.selectedQuality = streaming.selectedQuality;
+    formattedVideo.qualityUrls = streaming.qualityUrls;
+    formattedVideo.streaming = {
+        defaultQuality: streaming.defaultQuality,
+        selectedQuality: streaming.selectedQuality,
+        selectedPlaybackUrl: streaming.selectedPlaybackUrl,
+        masterPlaylistUrl: streaming.masterPlaylistUrl,
+        availableQualities: streaming.availableQualities,
     };
 
 

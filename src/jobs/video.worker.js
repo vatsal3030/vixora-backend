@@ -7,6 +7,7 @@ import {
 import { closeVideoQueue } from "../queue/video.queue.js";
 import prisma from "../db/prisma.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
+import { buildVideoStreamingPayload } from "../utils/videoQuality.js";
 import {
   ChannelNotificationAudience,
   dispatchChannelActivityNotification,
@@ -90,6 +91,8 @@ const processJob = async (job) => {
           select: {
             thumbnail: true,
             videoFile: true,
+            playbackUrl: true,
+            availableQualities: true,
             title: true,
             isShort: true,
             ownerId: true,
@@ -114,6 +117,12 @@ const processJob = async (job) => {
           });
         }
 
+        const streaming = buildVideoStreamingPayload({
+          sourceUrl: video.videoFile,
+          playbackUrl: video.playbackUrl,
+          availableQualities: video.availableQualities,
+        });
+
         await prisma.video.update({
           where: { id: videoId },
           data: {
@@ -123,6 +132,9 @@ const processJob = async (job) => {
             processingStep: "DONE",
             isPublished: true,
             isHlsReady: true,
+            playbackUrl: streaming.selectedPlaybackUrl,
+            masterPlaylistUrl: streaming.masterPlaylistUrl,
+            availableQualities: streaming.availableQualities,
           },
         });
 
