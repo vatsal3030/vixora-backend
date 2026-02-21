@@ -519,6 +519,7 @@ model AIChatSession {
   id        String          @id @default(uuid())
   userId    String?
   videoId   String?
+  title     String?
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
   messages  AIChatMessage[]

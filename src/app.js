@@ -25,6 +25,7 @@ import uploadRouter from "./routes/upload.routes.js";
 import mediaRoutes from "./routes/media.routes.js";
 import aiRoutes from "./routes/ai.routes.js";
 import feedbackRoutes from "./routes/feedback.routes.js";
+import searchRoutes from "./routes/search.routes.js";
 import { normalizeOrigin, parseAllowedOrigins } from "./config/cors.config.js";
 
 import passport from "passport";
@@ -101,6 +102,7 @@ app.use("/api/v1/upload", uploadRouter);
 app.use("/api/v1/media", mediaRoutes);
 app.use("/api/v1/ai", aiRoutes);
 app.use("/api/v1/feedback", feedbackRoutes);
+app.use("/api/v1/search", searchRoutes);
 
 
 app.get("/", (req, res) => {

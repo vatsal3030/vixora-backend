@@ -1,0 +1,2 @@
+ALTER TABLE "AIChatSession"
+ADD COLUMN "title" TEXT;

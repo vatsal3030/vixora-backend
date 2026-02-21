@@ -22,6 +22,7 @@ const MAX_USER_MESSAGE_LENGTH = 1500;
 const MAX_CONTEXT_MESSAGES = 8;
 const MAX_TRANSCRIPT_CONTEXT_CHARS = 5000;
 const MAX_TRANSCRIPT_INPUT_CHARS = 120000;
+const MAX_SESSION_CACHE_LOOKBACK_MESSAGES = 40;
 const DEFAULT_DAILY_AI_MESSAGES_LIMIT = 40;
 const ALLOWED_TRANSCRIPT_SOURCES = new Set(["MANUAL", "AUTO", "IMPORTED"]);
 
@@ -192,6 +193,21 @@ const buildVideoContextText = ({
   return parts.join("\n");
 };
 
+const buildDefaultSessionTitle = (videoTitle) => {
+  const safeVideoTitle = trimTo(videoTitle, 80);
+  if (safeVideoTitle) {
+    return `Chat about: ${safeVideoTitle}`;
+  }
+  return "General assistant chat";
+};
+
+const deriveSessionTitle = (session) => {
+  const explicitTitle = trimTo(session?.title, MAX_SESSION_TITLE_LENGTH);
+  if (explicitTitle) return explicitTitle;
+
+  return buildDefaultSessionTitle(session?.video?.title);
+};
+
 const normalizeTranscriptSource = (value) => {
   const source = normalizeText(value).toUpperCase();
   if (!source) return "MANUAL";
@@ -202,6 +218,94 @@ const parseNonNegativeNumber = (value) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return parsed;
+};
+
+const normalizeComparableText = (value) =>
+  normalizeText(value).replace(/\s+/g, " ").toLowerCase();
+
+const pickTranscriptContextForQuestion = ({
+  transcriptText = "",
+  transcriptSegments = [],
+  question = "",
+  maxChars = MAX_TRANSCRIPT_CONTEXT_CHARS,
+}) => {
+  const normalizedQuestion = normalizeComparableText(question);
+  const normalizedTranscript = normalizeText(transcriptText);
+
+  if (!normalizedTranscript && (!Array.isArray(transcriptSegments) || transcriptSegments.length === 0)) {
+    return "";
+  }
+
+  if (!normalizedQuestion) {
+    return trimTo(normalizedTranscript, maxChars);
+  }
+
+  const tokens = tokenize(normalizedQuestion).filter((token) => token.length > 2);
+
+  if (!Array.isArray(transcriptSegments) || transcriptSegments.length === 0 || tokens.length === 0) {
+    return trimTo(normalizedTranscript, maxChars);
+  }
+
+  const scored = transcriptSegments
+    .map((segment, index) => {
+      const text = normalizeText(segment?.text);
+      if (!text) return null;
+
+      const haystack = text.toLowerCase();
+      let score = 0;
+      for (const token of tokens) {
+        if (haystack.includes(token)) score += 1;
+      }
+
+      return {
+        index,
+        score,
+        text,
+      };
+    })
+    .filter(Boolean);
+
+  const positiveMatches = scored
+    .filter((row) => row.score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.index - b.index;
+    })
+    .slice(0, 16);
+
+  if (positiveMatches.length === 0) {
+    return trimTo(normalizedTranscript, maxChars);
+  }
+
+  const orderedUnique = [...positiveMatches]
+    .sort((a, b) => a.index - b.index)
+    .map((row) => row.text);
+
+  const merged = trimTo(orderedUnique.join(" "), maxChars);
+  return merged || trimTo(normalizedTranscript, maxChars);
+};
+
+const findSessionCachedReply = ({ orderedRecentMessages, incomingMessage }) => {
+  if (!Array.isArray(orderedRecentMessages) || orderedRecentMessages.length < 2) {
+    return null;
+  }
+
+  const normalizedIncoming = normalizeComparableText(incomingMessage);
+  if (!normalizedIncoming) return null;
+
+  for (let index = orderedRecentMessages.length - 2; index >= 0; index -= 1) {
+    const current = orderedRecentMessages[index];
+    const next = orderedRecentMessages[index + 1];
+
+    if (!current || !next) continue;
+    if (current.role !== "USER" || next.role !== "ASSISTANT") continue;
+
+    if (normalizeComparableText(current.content) === normalizedIncoming) {
+      return trimTo(next.content, 6000);
+    }
+  }
+
+  return null;
 };
 
 const loadVideoForAi = async ({ videoId, viewerId }) => {
@@ -269,6 +373,7 @@ const ensureSessionOwnership = async ({ sessionId, userId }) => {
       id: true,
       userId: true,
       videoId: true,
+      title: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -366,12 +471,12 @@ export const createAiSession = asyncHandler(async (req, res) => {
   const rawTitle = normalizeText(req.body?.title);
 
   let resolvedVideoId = null;
-  let defaultTitle = "General assistant chat";
+  let defaultTitle = buildDefaultSessionTitle();
 
   if (videoId) {
     const video = await loadVideoForAi({ videoId, viewerId: userId });
     resolvedVideoId = video.id;
-    defaultTitle = `Chat about: ${trimTo(video.title, 80)}`;
+    defaultTitle = buildDefaultSessionTitle(video.title);
   }
 
   const title = trimTo(rawTitle || defaultTitle, MAX_SESSION_TITLE_LENGTH);
@@ -380,6 +485,7 @@ export const createAiSession = asyncHandler(async (req, res) => {
     data: {
       userId,
       videoId: resolvedVideoId || null,
+      title,
       messages: {
         create: {
           role: "SYSTEM",
@@ -393,6 +499,7 @@ export const createAiSession = asyncHandler(async (req, res) => {
       id: true,
       userId: true,
       videoId: true,
+      title: true,
       createdAt: true,
       updatedAt: true,
       video: {
@@ -410,7 +517,7 @@ export const createAiSession = asyncHandler(async (req, res) => {
       201,
       {
         ...session,
-        title,
+        title: deriveSessionTitle(session),
         aiProvider: isAiConfigured() ? "gemini" : "fallback",
       },
       "AI session created"
@@ -431,7 +538,13 @@ export const listAiSessions = asyncHandler(async (req, res) => {
       skip,
       take: limit,
       orderBy: { updatedAt: "desc" },
-      include: {
+      select: {
+        id: true,
+        userId: true,
+        videoId: true,
+        title: true,
+        createdAt: true,
+        updatedAt: true,
         _count: {
           select: { messages: true },
         },
@@ -460,6 +573,7 @@ export const listAiSessions = asyncHandler(async (req, res) => {
     id: session.id,
     userId: session.userId,
     videoId: session.videoId,
+    title: deriveSessionTitle(session),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session._count?.messages || 0,
@@ -492,7 +606,21 @@ export const getAiSessionMessages = asyncHandler(async (req, res) => {
   await ensureSessionOwnership({ sessionId, userId });
   const { page, limit, skip } = sanitizePagination(req.query?.page, req.query?.limit, 100);
 
-  const [totalItems, messages] = await Promise.all([
+  const [session, totalItems, messages] = await Promise.all([
+    prisma.aIChatSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        title: true,
+        video: {
+          select: {
+            id: true,
+            title: true,
+            thumbnail: true,
+          },
+        },
+      },
+    }),
     prisma.aIChatMessage.count({
       where: { sessionId },
     }),
@@ -520,6 +648,15 @@ export const getAiSessionMessages = asyncHandler(async (req, res) => {
         currentPage: page,
         limit,
         totalItems,
+        extra: {
+          session: session
+            ? {
+                id: session.id,
+                title: deriveSessionTitle(session),
+                video: session.video || null,
+              }
+            : null,
+        },
       }),
       "AI messages fetched"
     )
@@ -536,26 +673,98 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
 
   const session = await ensureSessionOwnership({ sessionId, userId });
 
-  const [video, history] = await Promise.all([
+  const [video, recentMessages] = await Promise.all([
     session.videoId
       ? loadVideoForAi({ videoId: session.videoId, viewerId: userId })
       : Promise.resolve(null),
     prisma.aIChatMessage.findMany({
       where: { sessionId },
       orderBy: { createdAt: "desc" },
-      take: MAX_CONTEXT_MESSAGES,
+      take: Math.max(MAX_CONTEXT_MESSAGES, MAX_SESSION_CACHE_LOOKBACK_MESSAGES),
       select: {
+        id: true,
         role: true,
         content: true,
+        createdAt: true,
       },
     }),
   ]);
 
-  const orderedHistory = [...history].reverse();
+  const orderedRecentMessages = [...recentMessages].reverse();
+  const orderedHistory = orderedRecentMessages
+    .slice(-MAX_CONTEXT_MESSAGES)
+    .map((row) => ({
+      role: row.role,
+      content: row.content,
+    }));
   const contextMeta = buildChatContextMeta({
     video,
     transcriptText: video?.transcriptText || "",
   });
+  const cachedReply = findSessionCachedReply({
+    orderedRecentMessages,
+    incomingMessage: message,
+  });
+
+  if (cachedReply) {
+    const created = await prisma.$transaction(async (tx) => {
+      const userMessage = await tx.aIChatMessage.create({
+        data: {
+          sessionId,
+          role: "USER",
+          content: message,
+        },
+        select: {
+          id: true,
+          role: true,
+          content: true,
+          createdAt: true,
+        },
+      });
+
+      const assistantMessage = await tx.aIChatMessage.create({
+        data: {
+          sessionId,
+          role: "ASSISTANT",
+          content: cachedReply,
+        },
+        select: {
+          id: true,
+          role: true,
+          content: true,
+          createdAt: true,
+        },
+      });
+
+      await tx.aIChatSession.update({
+        where: { id: sessionId },
+        data: { updatedAt: new Date() },
+      });
+
+      return { userMessage, assistantMessage };
+    });
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          sessionId,
+          userMessage: toClientMessage(created.userMessage),
+          assistantMessage: toClientMessage(created.assistantMessage),
+          reply: created.assistantMessage?.content || "",
+          answer: created.assistantMessage?.content || "",
+          context: contextMeta,
+          ai: {
+            provider: "session-cache",
+            model: "none",
+            warning: null,
+            quota: null,
+          },
+        },
+        "AI response generated (cached)"
+      )
+    );
+  }
 
   if (isGreetingOrSmallTalk(message)) {
     const replyText = buildSmallTalkReply({ video, contextMeta });
@@ -683,10 +892,18 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
 
   const quota = await ensureAiDailyQuota(userId);
 
+  const transcriptContext = video
+    ? pickTranscriptContextForQuestion({
+        transcriptText: video.transcriptText,
+        transcriptSegments: video.transcriptSegments,
+        question: message,
+      })
+    : "";
+
   const videoContextText = video
     ? buildVideoContextText({
         video,
-        transcriptText: video.transcriptText,
+        transcriptText: transcriptContext,
       })
     : "No specific video context. Assist user with platform guidance and concise answers.";
 
@@ -1048,9 +1265,15 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
 
   const quota = await ensureAiDailyQuota(userId);
 
+  const transcriptContext = pickTranscriptContextForQuestion({
+    transcriptText: video.transcriptText,
+    transcriptSegments: video.transcriptSegments,
+    question: "summarize key points from the full video",
+  });
+
   const videoContextText = buildVideoContextText({
     video,
-    transcriptText: video.transcriptText,
+    transcriptText: transcriptContext,
     includeSummary: false,
   });
 
@@ -1183,9 +1406,15 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
 
   const quota = await ensureAiDailyQuota(userId);
 
+  const transcriptContext = pickTranscriptContextForQuestion({
+    transcriptText: video.transcriptText,
+    transcriptSegments: video.transcriptSegments,
+    question,
+  });
+
   const videoContextText = buildVideoContextText({
     video,
-    transcriptText: video.transcriptText,
+    transcriptText: transcriptContext,
   });
 
   const prompt = [
@@ -1245,6 +1474,215 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
         },
       },
       "AI answer generated"
+    )
+  );
+});
+
+export const renameAiSession = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const sessionId = normalizeText(req.params?.sessionId);
+  const title = trimTo(req.body?.title, MAX_SESSION_TITLE_LENGTH);
+
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+  if (!title) throw new ApiError(400, "title is required");
+
+  await ensureSessionOwnership({ sessionId, userId });
+
+  const updated = await prisma.aIChatSession.update({
+    where: { id: sessionId },
+    data: {
+      title,
+      updatedAt: new Date(),
+    },
+    select: {
+      id: true,
+      userId: true,
+      videoId: true,
+      title: true,
+      createdAt: true,
+      updatedAt: true,
+      video: {
+        select: {
+          id: true,
+          title: true,
+          thumbnail: true,
+        },
+      },
+    },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        ...updated,
+        title: deriveSessionTitle(updated),
+      },
+      "AI session renamed"
+    )
+  );
+});
+
+export const deleteAiSession = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const sessionId = normalizeText(req.params?.sessionId);
+
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  await ensureSessionOwnership({ sessionId, userId });
+
+  await prisma.aIChatSession.delete({
+    where: { id: sessionId },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        sessionId,
+        deleted: true,
+      },
+      "AI session deleted"
+    )
+  );
+});
+
+export const clearAllAiSessions = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const videoId = normalizeText(req.query?.videoId);
+
+  const deleteResult = await prisma.aIChatSession.deleteMany({
+    where: {
+      userId,
+      ...(videoId ? { videoId } : {}),
+    },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        deletedSessions: deleteResult.count,
+        filter: {
+          videoId: videoId || null,
+        },
+      },
+      "AI sessions cleared"
+    )
+  );
+});
+
+export const clearAiSessionMessages = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const sessionId = normalizeText(req.params?.sessionId);
+  const keepSystem = parseBoolean(req.query?.keepSystem, true);
+
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  await ensureSessionOwnership({ sessionId, userId });
+
+  const where = {
+    sessionId,
+    ...(keepSystem ? { role: { not: "SYSTEM" } } : {}),
+  };
+
+  const deleteResult = await prisma.aIChatMessage.deleteMany({
+    where,
+  });
+
+  await prisma.aIChatSession.update({
+    where: { id: sessionId },
+    data: { updatedAt: new Date() },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        sessionId,
+        deletedMessages: deleteResult.count,
+        keepSystem,
+      },
+      "AI session messages cleared"
+    )
+  );
+});
+
+export const deleteAiSessionMessage = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const sessionId = normalizeText(req.params?.sessionId);
+  const messageId = normalizeText(req.params?.messageId);
+  const cascade = parseBoolean(req.query?.cascade, true);
+
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+  if (!messageId) throw new ApiError(400, "messageId is required");
+
+  await ensureSessionOwnership({ sessionId, userId });
+
+  const target = await prisma.aIChatMessage.findFirst({
+    where: {
+      id: messageId,
+      sessionId,
+    },
+    select: {
+      id: true,
+      role: true,
+      createdAt: true,
+    },
+  });
+
+  if (!target) throw new ApiError(404, "Message not found");
+  if (target.role === "SYSTEM") {
+    throw new ApiError(400, "System message cannot be deleted");
+  }
+
+  const deletedIds = [target.id];
+
+  if (cascade && target.role === "USER") {
+    const nextMessage = await prisma.aIChatMessage.findFirst({
+      where: {
+        sessionId,
+        createdAt: {
+          gt: target.createdAt,
+        },
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+      select: {
+        id: true,
+        role: true,
+      },
+    });
+
+    if (nextMessage?.role === "ASSISTANT") {
+      deletedIds.push(nextMessage.id);
+    }
+  }
+
+  await prisma.$transaction([
+    prisma.aIChatMessage.deleteMany({
+      where: {
+        id: { in: deletedIds },
+        sessionId,
+      },
+    }),
+    prisma.aIChatSession.update({
+      where: { id: sessionId },
+      data: { updatedAt: new Date() },
+    }),
+  ]);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        sessionId,
+        deletedIds,
+        deletedCount: deletedIds.length,
+        cascadeApplied: deletedIds.length > 1,
+      },
+      "AI message deleted"
     )
   );
 });

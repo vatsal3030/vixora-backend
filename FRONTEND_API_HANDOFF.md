@@ -506,6 +506,64 @@ Feed notes:
   - videos from blocked channels (`don't recommend this channel`)
 - `/shorts` defaults to include comments (`includeComments=true`, `commentsLimit=5`, max `10`).
 
+## Public Search
+
+Base: `/api/v1/search` (public; optional token supported)
+
+| Method | Endpoint | Query |
+|---|---|---|
+| GET | `/` | `q,scope,type,tags,category,channelCategory,sortBy,sortType` |
+| GET | `/` | for `scope=all`: `perTypeLimit` (default `5`, max `15`) |
+| GET | `/` | for typed scope: `page,limit` (`videos|channels|tweets|playlists`) |
+
+Notes:
+
+- `scope` (or alias `type`): `all|videos|channels|tweets|playlists`
+- search is public-only:
+  - videos: published + completed + non-deleted
+  - channels: non-deleted
+  - playlists: public + non-deleted
+  - tweets: non-deleted
+- `tags` and `category` primarily affect video search.
+- `channelCategory` is alias of `category` for channel filtering.
+- response is cached briefly (L1/Redis) to reduce DB load on free tier.
+
+### Search response shape
+
+#### `scope=all`
+
+```json
+{
+  "scope": "all",
+  "query": "nature",
+  "filters": { "tags": ["travel"], "category": "outdoors" },
+  "limits": { "perTypeLimit": 5 },
+  "results": {
+    "videos": [],
+    "channels": [],
+    "tweets": [],
+    "playlists": []
+  },
+  "totals": {
+    "videos": 12,
+    "channels": 3,
+    "tweets": 8,
+    "playlists": 2
+  }
+}
+```
+
+#### `scope=videos|channels|tweets|playlists`
+
+Returns normalized list payload:
+
+- `data.items`
+- `data.pagination`
+- plus:
+  - `data.scope`
+  - `data.query`
+  - `data.filters`
+
 ## AI Assistant
 
 Base: `/api/v1/ai` (protected)
@@ -514,8 +572,13 @@ Base: `/api/v1/ai` (protected)
 |---|---|---|
 | POST | `/sessions` | body: `{ videoId?, title? }` |
 | GET | `/sessions` | query: `page,limit` |
+| DELETE | `/sessions` | query: `videoId?` (optional scoped clear) |
+| PATCH | `/sessions/:sessionId` | body: `{ title }` |
+| DELETE | `/sessions/:sessionId` | none |
 | GET | `/sessions/:sessionId/messages` | query: `page,limit` |
 | POST | `/sessions/:sessionId/messages` | body: `{ message }` |
+| DELETE | `/sessions/:sessionId/messages` | query: `keepSystem=true|false` (default `true`) |
+| DELETE | `/sessions/:sessionId/messages/:messageId` | query: `cascade=true|false` (default `true`) |
 | GET | `/videos/:videoId/summary` | none |
 | POST | `/videos/:videoId/summary` | body: `{ force? }` |
 | POST | `/videos/:videoId/ask` | body: `{ question }` |
@@ -529,9 +592,11 @@ AI notes:
 - Safe fallback responses are returned when AI provider is unavailable.
 - Daily cap enforced per user (`AI_DAILY_MESSAGE_LIMIT`, default `40`).
 - Session/chat data persists in DB (`AIChatSession`, `AIChatMessage`).
+- AI chat sessions now support persisted custom `title`.
 - Responses now include `data.context` with context health:
   - `hasTranscript`, `transcriptChars`, `hasDescription`, `hasSummary`, `quality` (`RICH|LIMITED|MINIMAL`)
 - Greeting/small-talk may return `data.ai.provider = "rule-based"` (does not call Gemini).
+- Repeated same question in same session may return `data.ai.provider = "session-cache"` (no Gemini call; faster + cheaper).
 - For strong video Q&A quality, provide transcript text using:
   - `POST /api/v1/ai/videos/:videoId/transcript`
   - body example: `{ "transcript": "...full transcript text...", "language": "en" }`
@@ -624,6 +689,34 @@ Response list item shape (`data.items[]`):
 ```
 
 Use `roleLower` directly for message side mapping.
+
+`GET /sessions/:sessionId/messages` also returns:
+
+```json
+{
+  "session": {
+    "id": "uuid",
+    "title": "My chat title",
+    "video": { "id": "uuid", "title": "Video title", "thumbnail": "..." }
+  }
+}
+```
+
+#### 2.1) Rename/Delete chat session
+
+- Rename:
+  - `PATCH /api/v1/ai/sessions/:sessionId`
+  - body: `{ "title": "New title" }`
+- Clear all sessions:
+  - `DELETE /api/v1/ai/sessions`
+  - optional query: `videoId=<videoId>` to clear only chats tied to one video
+- Delete full chat:
+  - `DELETE /api/v1/ai/sessions/:sessionId`
+- Clear one chat history but keep session:
+  - `DELETE /api/v1/ai/sessions/:sessionId/messages?keepSystem=true`
+- Delete one message:
+  - `DELETE /api/v1/ai/sessions/:sessionId/messages/:messageId?cascade=true`
+  - when deleting a `USER` message, default `cascade=true` also removes the immediate paired `ASSISTANT` reply.
 
 #### 3) Ask video question
 
@@ -945,7 +1038,9 @@ Base: `/api/v1/watch-history` (protected)
 |---|---|---|
 | GET | `/` | query: `page,limit,query,isShort,includeCompleted,sortBy,sortType` |
 | POST | `/` | body: `{ videoId, progress, duration }` |
+| DELETE | `/` | query: `completedOnly=true|false` (optional; default clears all) |
 | GET | `/:videoId` | none |
+| DELETE | `/:videoId` | none |
 | POST | `/bulk` | body: `{ videoIds: string[] }` |
 
 Watch history notes:
@@ -965,7 +1060,8 @@ Watch history notes:
 - Public watch page: `/api/v1/watch/:videoId` (+ optional `quality` query)
 - Stream-only load (optional): `/api/v1/watch/:videoId/stream`
 - Transcript panel: `/api/v1/watch/:videoId/transcript` (supports `q`, `from`, `to`, paging)
-- AI assistant/chat: `/api/v1/ai/sessions`, `/api/v1/ai/sessions/:sessionId/messages`, `/api/v1/ai/videos/:videoId/summary`, `/api/v1/ai/videos/:videoId/ask`
+- AI assistant/chat: `/api/v1/ai/sessions`, `/api/v1/ai/sessions/:sessionId`, `/api/v1/ai/sessions/:sessionId/messages`, `/api/v1/ai/videos/:videoId/summary`, `/api/v1/ai/videos/:videoId/ask`
+- Global search bar: `/api/v1/search?scope=all&q=...` and typed search (`scope=videos|channels|tweets|playlists`)
 - Upload studio: `/api/v1/upload/session` -> `/api/v1/upload/signature` -> Cloudinary direct upload -> `/api/v1/upload/finalize/:sessionId` -> `/api/v1/videos/:videoId/processing-status` -> `/api/v1/videos/:videoId/publish`
 - Comments panel: `/api/v1/comments/:videoId`, `/api/v1/likes/toggle/c/:commentId`
 - Channel page: `/api/v1/channels/:channelId`, `/about`, `/videos`, `/shorts`, `/playlists`, `/tweets`
@@ -985,6 +1081,7 @@ Watch history notes:
 - Quality playback supports `AUTO`, `MAX`, and manual levels (`1080p`, `720p`, etc). Use `quality` query param for selection.
 - For account switch, frontend must persist `accountSwitchToken` per account (secure storage policy on frontend side).
 - AI APIs require authenticated user and respect daily quota limits.
+- AI responses can come from `gemini`, `rule-based`, or `session-cache` providers depending on request type and cache hit.
 - Folder checks are strict in backend verification:
   - video finalize expects `videos/<userId>` and `thumbnails/<userId>`
   - avatar update expects `avatars/<userId>`

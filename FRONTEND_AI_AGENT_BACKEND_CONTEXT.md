@@ -271,7 +271,7 @@ Logic includes:
 
 Endpoints:
 
-- Sessions: create/list/messages
+- Sessions: create/list/messages + rename/delete session + clear all sessions + clear/delete messages
 - Video summary get/generate
 - Video ask endpoint
 - Transcript endpoints:
@@ -283,6 +283,7 @@ Endpoints:
 Backend behavior:
 
 - Persists in `AIChatSession` and `AIChatMessage`
+- Session title is persisted (`AIChatSession.title`) and can be updated from frontend.
 - If `GEMINI_API_KEY` exists, uses Gemini model fallback chain
 - If Gemini unavailable, safe fallback response returned where possible
 - Daily quota enforced by counting AI usage records in `BackgroundJob` (`AI_CHAT` / `AI_SUMMARY`) with user correlation
@@ -292,12 +293,43 @@ Backend behavior:
 - AI responses include `data.context`:
   - `hasTranscript`, `transcriptChars`, `hasDescription`, `hasSummary`, `quality` (`RICH|LIMITED|MINIMAL`)
 - For greeting/small-talk, backend may return `provider = "rule-based"` without consuming Gemini call.
+- For repeated same question in same session, backend may return `provider = "session-cache"` (no Gemini call; free-tier friendly).
 - Transcript inputs supported:
   - plain text transcript
   - SRT/VTT formatted text
   - cue arrays (`cues`/`segments`) with start/end timing + text
 
-### 5.12 Feedback + Reporting
+Clear-history operations:
+
+- `DELETE /api/v1/ai/sessions` (optional `videoId` scoped clear)
+- `DELETE /api/v1/ai/sessions/:sessionId/messages` (optional `keepSystem`)
+- `DELETE /api/v1/ai/sessions/:sessionId/messages/:messageId` (optional `cascade`)
+
+### 5.12 Unified Public Search
+
+Endpoint:
+
+- `GET /api/v1/search`
+
+Scopes:
+
+- `scope=all` for grouped results (`videos/channels/tweets/playlists`)
+- `scope=videos|channels|tweets|playlists` for paginated typed results
+
+Filters:
+
+- `q`
+- `tags` (video-oriented)
+- `category` / `channelCategory`
+- `sortBy`, `sortType`
+
+Free-tier notes:
+
+- short TTL cached responses (L1 + optional Redis)
+- grouped mode defaults to small per-type limit
+- search-history logging only for authenticated users and non-trivial queries
+
+### 5.13 Feedback + Reporting
 
 Endpoints:
 

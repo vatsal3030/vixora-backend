@@ -293,3 +293,64 @@ export const getProgressForVideos = asyncHandler(async (req, res) => {
 
   return res.json(new ApiResponse(200, map));
 });
+
+/**
+ * Delete watch history for a single video
+ * DELETE /watch-history/:videoId
+ */
+export const removeWatchHistoryItem = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const { videoId } = req.params;
+
+  if (!videoId) {
+    throw new ApiError(400, "Video ID is required");
+  }
+
+  const result = await prisma.watchHistory.deleteMany({
+    where: {
+      userId,
+      videoId,
+    },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        videoId,
+        deleted: result.count > 0,
+      },
+      result.count > 0 ? "Watch history item removed" : "Watch history item already absent"
+    )
+  );
+});
+
+/**
+ * Clear watch history for current user
+ * DELETE /watch-history
+ * query: completedOnly=true|false (optional)
+ */
+export const clearWatchHistory = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const completedOnly = parseBooleanQuery(req.query?.completedOnly);
+
+  const result = await prisma.watchHistory.deleteMany({
+    where: {
+      userId,
+      ...(completedOnly === true ? { completed: true } : {}),
+    },
+  });
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        deletedCount: result.count,
+        filter: {
+          completedOnly: completedOnly === true,
+        },
+      },
+      "Watch history cleared"
+    )
+  );
+});

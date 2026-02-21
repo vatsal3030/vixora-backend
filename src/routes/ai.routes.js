@@ -3,13 +3,18 @@ import { verifyJwt } from "../middlewares/auth.middleware.js";
 import { aiLimiter } from "../middlewares/rateLimit.middleware.js";
 import {
   askVideoQuestion,
+  clearAiSessionMessages,
+  clearAllAiSessions,
   createAiSession,
+  deleteAiSession,
+  deleteAiSessionMessage,
   deleteVideoTranscript,
   generateVideoSummary,
   getAiSessionMessages,
   getVideoTranscriptForAi,
   getVideoSummary,
   listAiSessions,
+  renameAiSession,
   sendAiSessionMessage,
   upsertVideoTranscript,
 } from "../controllers/ai.controller.js";
@@ -20,8 +25,13 @@ router.use(verifyJwt);
 
 router.post("/sessions", aiLimiter, createAiSession);
 router.get("/sessions", listAiSessions);
+router.delete("/sessions", aiLimiter, clearAllAiSessions);
+router.patch("/sessions/:sessionId", aiLimiter, renameAiSession);
+router.delete("/sessions/:sessionId", aiLimiter, deleteAiSession);
 router.get("/sessions/:sessionId/messages", getAiSessionMessages);
 router.post("/sessions/:sessionId/messages", aiLimiter, sendAiSessionMessage);
+router.delete("/sessions/:sessionId/messages", aiLimiter, clearAiSessionMessages);
+router.delete("/sessions/:sessionId/messages/:messageId", aiLimiter, deleteAiSessionMessage);
 
 router.get("/videos/:videoId/summary", getVideoSummary);
 router.post("/videos/:videoId/summary", aiLimiter, generateVideoSummary);
