@@ -7,6 +7,31 @@ const CHANNEL_ACTIVITY_AUDIENCE = {
 };
 
 const SOCKET_EVENT_NOTIFICATION_NEW = "notification:new";
+const DEFAULT_NOTIFICATION_DEDUP_WINDOW_MINUTES = 30;
+
+const parsePositiveInt = (value, fallbackValue) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return fallbackValue;
+  return parsed;
+};
+
+const cleanEnv = (value) => {
+  if (value === undefined || value === null) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1).trim();
+  }
+  return raw;
+};
+
+const NOTIFICATION_DEDUP_WINDOW_MINUTES = parsePositiveInt(
+  cleanEnv(process.env.NOTIFICATION_DEDUP_WINDOW_MINUTES),
+  DEFAULT_NOTIFICATION_DEDUP_WINDOW_MINUTES
+);
 
 const resolveAllowedBellLevels = (audience) => {
   if (audience === CHANNEL_ACTIVITY_AUDIENCE.ALL_ONLY) {
@@ -36,6 +61,74 @@ const normalizeActivityPayload = ({
       channelId,
       ...extraData,
     },
+  };
+};
+
+const buildDedupKey = ({ type, senderId, videoId, activityType }) => {
+  return [
+    String(type || "").trim().toUpperCase(),
+    String(senderId || "").trim(),
+    String(videoId || "").trim(),
+    String(activityType || "").trim().toUpperCase(),
+  ].join("|");
+};
+
+const filterDeduplicatedTargets = async ({
+  targets,
+  payload,
+  now,
+}) => {
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return { finalTargets: [], skippedByDedup: 0 };
+  }
+
+  if (NOTIFICATION_DEDUP_WINDOW_MINUTES <= 0) {
+    return { finalTargets: targets, skippedByDedup: 0 };
+  }
+
+  const dedupKey = buildDedupKey({
+    type: payload.type,
+    senderId: payload.senderId,
+    videoId: payload.videoId,
+    activityType: payload.data?.activityType,
+  });
+
+  const windowStart = new Date(
+    now.getTime() - NOTIFICATION_DEDUP_WINDOW_MINUTES * 60 * 1000
+  );
+
+  const existing = await prisma.notification.findMany({
+    where: {
+      userId: { in: targets },
+      type: payload.type,
+      senderId: payload.senderId,
+      videoId: payload.videoId,
+      createdAt: { gte: windowStart },
+    },
+    select: {
+      userId: true,
+      data: true,
+    },
+  });
+
+  const alreadyNotifiedUsers = new Set();
+  for (const row of existing) {
+    const existingKey = buildDedupKey({
+      type: payload.type,
+      senderId: payload.senderId,
+      videoId: payload.videoId,
+      activityType: row?.data?.activityType,
+    });
+    if (existingKey === dedupKey) {
+      alreadyNotifiedUsers.add(row.userId);
+    }
+  }
+
+  const finalTargets = targets.filter((userId) => !alreadyNotifiedUsers.has(userId));
+
+  return {
+    finalTargets,
+    skippedByDedup: targets.length - finalTargets.length,
   };
 };
 
@@ -98,7 +191,18 @@ export const dispatchChannelActivityNotification = async ({
   if (!targets.length) return { sent: 0 };
 
   const now = new Date();
-  const records = targets.map((targetUserId) => ({
+
+  const { finalTargets, skippedByDedup } = await filterDeduplicatedTargets({
+    targets,
+    payload,
+    now,
+  });
+
+  if (!finalTargets.length) {
+    return { sent: 0, skippedByDedup };
+  }
+
+  const records = finalTargets.map((targetUserId) => ({
     userId: targetUserId,
     title: payload.title,
     message: payload.message,
@@ -111,7 +215,7 @@ export const dispatchChannelActivityNotification = async ({
 
   await prisma.notification.createMany({ data: records });
 
-  for (const targetUserId of targets) {
+  for (const targetUserId of finalTargets) {
     emitToUser(targetUserId, SOCKET_EVENT_NOTIFICATION_NEW, {
       title: payload.title,
       message: payload.message,
@@ -124,8 +228,10 @@ export const dispatchChannelActivityNotification = async ({
     });
   }
 
-  return { sent: targets.length };
+  return {
+    sent: finalTargets.length,
+    skippedByDedup,
+  };
 };
 
 export const ChannelNotificationAudience = CHANNEL_ACTIVITY_AUDIENCE;
-

@@ -15,6 +15,7 @@ import {
     ChannelNotificationAudience,
     dispatchChannelActivityNotification,
 } from "../services/notification.service.js";
+import { metrics } from "../observability/usage.metrics.js";
 
 const MAX_UPLOAD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const MAX_UPLOAD_FILENAME_LENGTH = 255;
@@ -754,6 +755,7 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
     }
 
     if (!queued) {
+        metrics.recordQueueEvent("fallbackDirectProcessing");
         processVideoWithoutQueue(video.id);
     }
 

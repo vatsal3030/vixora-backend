@@ -4,6 +4,7 @@ import {
   isCacheEnabled,
   isRedisCacheEnabled,
 } from "../queue/redis.connection.js";
+import { metrics } from "../observability/usage.metrics.js";
 
 const parseBool = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;
@@ -113,45 +114,63 @@ export const getCachedValue = async ({ scope, params = {} }) => {
   const key = buildCacheKey(scope, params);
 
   if (!isCacheEnabled) {
-    return { hit: false, value: null, source: "disabled", key };
+    const result = { hit: false, value: null, source: "disabled", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: false });
+    return result;
   }
 
   const l1Value = readL1(key);
   if (l1Value !== null) {
-    return { hit: true, value: l1Value, source: "l1", key };
+    const result = { hit: true, value: l1Value, source: "l1", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: true });
+    return result;
   }
 
   if (!isRedisCacheEnabled) {
-    return { hit: false, value: null, source: "l1-only", key };
+    const result = { hit: false, value: null, source: "l1-only", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: false });
+    return result;
   }
 
   if (!isRedisScopeAllowed(scope)) {
-    return { hit: false, value: null, source: "l1-only-scope", key };
+    const result = { hit: false, value: null, source: "l1-only-scope", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: false });
+    return result;
   }
 
   const redis = getRedisConnection();
   if (!redis) {
-    return { hit: false, value: null, source: "no-redis", key };
+    const result = { hit: false, value: null, source: "no-redis", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: false });
+    return result;
   }
 
   try {
     const raw = await redis.get(key);
     if (!raw) {
-      return { hit: false, value: null, source: "miss", key };
+      const result = { hit: false, value: null, source: "miss", key };
+      metrics.recordCacheGet({ scope, source: result.source, hit: false });
+      return result;
     }
 
     const parsed = JSON.parse(raw);
     if (!parsed || parsed.e <= nowMs()) {
       // Skip delete to avoid write amplification under high cardinality keys.
-      return { hit: false, value: null, source: "expired", key };
+      const result = { hit: false, value: null, source: "expired", key };
+      metrics.recordCacheGet({ scope, source: result.source, hit: false });
+      return result;
     }
 
     const ttlLeftSeconds = Math.max(1, Math.floor((parsed.e - nowMs()) / 1000));
     writeL1(key, parsed.d, ttlLeftSeconds);
 
-    return { hit: true, value: parsed.d, source: "redis", key };
+    const result = { hit: true, value: parsed.d, source: "redis", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: true });
+    return result;
   } catch {
-    return { hit: false, value: null, source: "error", key };
+    const result = { hit: false, value: null, source: "error", key };
+    metrics.recordCacheGet({ scope, source: result.source, hit: false });
+    return result;
   }
 };
 
@@ -169,17 +188,21 @@ export const setCachedValue = async ({
   const ttl = parsePositiveInt(ttlSeconds, CACHE_DEFAULT_TTL_SECONDS);
 
   writeL1(key, value, ttl);
+  metrics.recordCacheSet({ scope });
 
   if (!isRedisCacheEnabled) {
+    metrics.recordCacheSetSkipped("disabled");
     return;
   }
 
   if (!isRedisScopeAllowed(scope)) {
+    metrics.recordCacheSetSkipped("scope");
     return;
   }
 
   if (ttl < CACHE_REDIS_MIN_TTL_SECONDS) {
     // Free-tier strategy: very short TTL keys remain in L1 only.
+    metrics.recordCacheSetSkipped("short-ttl");
     return;
   }
 

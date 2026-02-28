@@ -1,4 +1,5 @@
 import { Redis } from "ioredis";
+import { metrics } from "../observability/usage.metrics.js";
 
 const cleanEnv = (value) => {
   if (value === undefined || value === null) return "";
@@ -71,6 +72,8 @@ export const isRedisQuotaExceededError = (err) => {
   return message.includes("max requests limit exceeded");
 };
 
+export const isRedisHardDisabled = () => hardDisabled;
+
 const baseOptions = {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
@@ -98,26 +101,32 @@ const attachRedisListeners = (connection) => {
   let lastErrorLogAt = 0;
 
   connection.on("connect", () => {
+    metrics.recordRedisEvent("connected");
     console.log("Redis connected");
   });
 
   connection.on("reconnecting", () => {
+    metrics.recordRedisEvent("reconnecting");
     console.warn("Redis reconnecting...");
   });
 
   connection.on("error", (err) => {
+    metrics.recordRedisEvent("errors");
     const now = Date.now();
     if (now - lastErrorLogAt >= REDIS_ERROR_LOG_COOLDOWN_MS) {
       lastErrorLogAt = now;
       const message = err?.message || String(err);
       if (isTransientRedisError(err)) {
+        metrics.recordRedisEvent("transientErrors");
         console.warn("Redis transient error:", message);
       } else {
         console.error("Redis error:", message);
       }
 
       if (isRedisQuotaExceededError(err)) {
+        metrics.recordRedisEvent("quotaErrors");
         hardDisabled = true;
+        metrics.recordRedisEvent("hardDisabled");
         console.error("Redis disabled for this process due to Upstash max requests limit.");
         redisConnection = null;
         try {

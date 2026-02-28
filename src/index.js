@@ -3,9 +3,11 @@ import { createServer } from "node:http";
 import app from "./app.js";
 import prisma from "./db/prisma.js";
 import { parseAllowedOrigins } from "./config/cors.config.js";
+import { validateRuntimeEnv } from "./config/env.validation.js";
 import { initSocketServer } from "./realtime/socket.server.js";
 
 const PORT = process.env.PORT || 5000;
+validateRuntimeEnv();
 
 const parseBool = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;

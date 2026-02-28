@@ -1,6 +1,6 @@
 # Frontend AI Agent Backend Context (Vixora)
 
-Last verified: 2026-02-20  
+Last verified: 2026-02-28  
 Source of truth: `Backend/src/app.js`, `Backend/src/routes/*`, `Backend/src/controllers/*`, `Backend/prisma/schema.prisma`
 
 This document is designed for frontend AI agents that need to understand not only endpoint names, but also backend behavior, flow constraints, security checks, and edge cases.
@@ -28,6 +28,7 @@ Runtime roles supported by env flags:
 - Scheduler: cron-like background jobs
 
 Important: same codebase can run all roles; behavior is controlled by env flags (`RUN_WORKER`, `RUN_SCHEDULER`, `RUN_WORKER_ON_DEMAND`).
+Also note: runtime env validation now runs at startup (`src/config/env.validation.js`); in production strict mode, invalid env blocks server boot.
 
 ## 2) Non-Negotiable Contracts
 
@@ -123,6 +124,7 @@ Use this when AI agent needs source inspection.
 - Realtime notify service: `src/services/notification.service.js`, socket server in `src/realtime/socket.server.js`
 - AI: `src/routes/ai.routes.js` -> `src/controllers/ai.controller.js` + `src/services/ai.service.js`
 - Feedback: `src/routes/feedback.routes.js` -> `src/controllers/feedback.controller.js`
+- Internal ops: `src/routes/internal.routes.js` -> `src/controllers/internal.controller.js`
 
 ## 5) Critical End-to-End Flows
 
@@ -153,13 +155,13 @@ Required order:
 
 1. `POST /users/forgot-password` with email
 2. `POST /users/forgot-password/verify` with `{ email, otp }`
-3. `POST /users/reset-password` with `{ email, newPassword }`
+3. `POST /users/reset-password` with `{ email, newPassword }` + reset-token cookie
 
 Key behavior:
 
 - Step 2 sets `passwordResetToken` cookie (path `/api/v1/users`)
 - OTP is consumed after successful verify
-- Step 3 primarily uses reset-token cookie/body token
+- Step 3 primarily uses reset-token cookie or `{ resetToken }` body field
 - Legacy OTP fallback exists but should not be frontend default
 
 ### 5.4 Google OAuth
@@ -292,6 +294,8 @@ Backend behavior:
   - message objects include `content`, `text`, `message`, `role`, `roleLower`
 - AI responses include `data.context`:
   - `hasTranscript`, `transcriptChars`, `hasDescription`, `hasSummary`, `quality` (`RICH|LIMITED|MINIMAL`)
+- AI responses also include `data.ai.confidence` (`0..1`) and `data.ai.citations[]` for explainability.
+- `data.ai.quota` may include `globalUsedToday` and `globalDailyLimit` when global cap is enabled.
 - For greeting/small-talk, backend may return `provider = "rule-based"` without consuming Gemini call.
 - For repeated same question in same session, backend may return `provider = "session-cache"` (no Gemini call; free-tier friendly).
 - Transcript inputs supported:
@@ -305,7 +309,22 @@ Clear-history operations:
 - `DELETE /api/v1/ai/sessions/:sessionId/messages` (optional `keepSystem`)
 - `DELETE /api/v1/ai/sessions/:sessionId/messages/:messageId` (optional `cascade`)
 
-### 5.12 Unified Public Search
+### 5.12 Internal Usage Snapshot (Ops-only)
+
+Endpoint:
+
+- `GET /api/v1/internal/usage`
+
+Auth:
+
+- `x-internal-token: <INTERNAL_METRICS_TOKEN>` header (or bearer token)
+
+Behavior:
+
+- Returns runtime flags, in-memory usage counters, queue stats, and AI DB usage snapshot.
+- This route is not for normal product UI traffic.
+
+### 5.13 Unified Public Search
 
 Endpoint:
 
@@ -329,7 +348,7 @@ Free-tier notes:
 - grouped mode defaults to small per-type limit
 - search-history logging only for authenticated users and non-trivial queries
 
-### 5.13 Feedback + Reporting
+### 5.14 Feedback + Reporting
 
 Endpoints:
 
@@ -359,12 +378,18 @@ Behavior:
 
 - Redis optional and disabled safely by config
 - Uses throttled redis error logs
+- Supports hard-disable during runtime if Upstash max-request quota error is detected
 - Worker can run always or on-demand
 
 Queue/worker:
 
 - BullMQ queue for video processing
 - Worker can auto-shutdown when idle (`WORKER_IDLE_SHUTDOWN_MS`)
+- Queue enqueue has depth guard (`QUEUE_MAX_WAITING_JOBS`) to protect free-tier spikes
+
+Notifications:
+
+- Channel activity notifications use dedup window (`NOTIFICATION_DEDUP_WINDOW_MINUTES`) to reduce duplicate DB writes + socket emits.
 
 ## 7) Frontend AI Agent Integration Rules
 
@@ -396,7 +421,11 @@ Backend critical env (frontend-impact):
 - `UPLOAD_SESSION_TTL_MINUTES`
 - `SOCKET_ENABLED`, `SOCKET_PATH`
 - `GEMINI_API_KEY`, `AI_DAILY_MESSAGE_LIMIT`
+- `AI_GLOBAL_DAILY_MESSAGE_LIMIT` (optional global quota guard)
 - `ACCOUNT_SWITCH_SECRET`, `ACCOUNT_SWITCH_EXPIRY` (optional but recommended)
+- `INTERNAL_METRICS_TOKEN` (for internal usage endpoint)
+- `ENV_VALIDATE_STRICT` (optional; production defaults strict)
+- `NOTIFICATION_DEDUP_WINDOW_MINUTES` (ops cost control)
 
 Frontend env alignment:
 

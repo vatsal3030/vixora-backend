@@ -1,12 +1,12 @@
 # Frontend API Handoff
 
-Last updated: 2026-02-20
+Last updated: 2026-02-28
 Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`
 
 ## 1) Base URL and Global Behavior
 
 - API base: `/api/v1`
-- Media base: `/api/v1/media` (legacy alias also works: `/api/media`)
+- Media base: `/api/v1/media`
 - Health check: `GET /healthz`
 - Root check: `GET /`
 - Global rate limit: `100 requests/min/IP` on `/api/*`
@@ -363,7 +363,7 @@ Backend rules:
 - Uploading avatar/cover into wrong folder.
 - Using Cloudinary `/video/upload` for image.
 - Forgetting `withCredentials: true` / cookie not sent.
-- Calling `/api/media/...` while frontend base already includes `/api/v1`.
+- Calling wrong base path (`/api/media/...`) instead of `/api/v1/media/...`.
 
 ## 4) Route Catalog (Frontend usage)
 
@@ -398,7 +398,7 @@ Base: `/api/v1/users`
 | GET | `/current-user` | Yes | none |
 | POST | `/forgot-password` | No | `{ email }` |
 | POST | `/forgot-password/verify` | No | `{ email, otp }` |
-| POST | `/reset-password` | No | `{ email, otp, newPassword }` |
+| POST | `/reset-password` | No | `{ email, newPassword, resetToken? }` (`otp` accepted only as legacy fallback) |
 | POST | `/change-password` | Yes | `{ oldPassword, newPassword }` |
 | PATCH | `/update-account` | Yes | `{ fullName }` |
 | PATCH | `/update-avatar` | Yes | `{ avatarPublicId }` |
@@ -424,6 +424,13 @@ Auth response additions:
   - `data.accountSwitch.account`
 - Use `accountSwitchToken` to implement multi-account switch without logging out.
 
+Forgot-password flow notes:
+
+- After `POST /users/forgot-password/verify`, backend sets `passwordResetToken` HttpOnly cookie (path `/api/v1/users`).
+- Preferred reset request is `POST /users/reset-password` with `{ email, newPassword }` and cookie included.
+- If cookie transport is unavailable, frontend can send `{ resetToken }` in body.
+- Passing OTP directly to `/reset-password` is supported only for legacy compatibility.
+
 ## Upload
 
 Base: `/api/v1/upload`
@@ -438,7 +445,7 @@ Base: `/api/v1/upload`
 
 ## Media
 
-Base: `/api/v1/media` (legacy alias `/api/media` also works)
+Base: `/api/v1/media`
 
 | Method | Endpoint | Auth | Request |
 |---|---|---|---|
@@ -651,6 +658,24 @@ Response `data`:
     "provider": "gemini",
     "model": "gemini-2.5-flash",
     "warning": null,
+    "confidence": 0.86,
+    "citations": [
+      {
+        "type": "VIDEO_METADATA",
+        "videoId": "uuid",
+        "title": "Video title",
+        "fields": ["title", "description", "summary"]
+      },
+      {
+        "type": "TRANSCRIPT",
+        "available": true,
+        "transcriptChars": 4820,
+        "language": "en",
+        "source": "MANUAL",
+        "wordCount": 812,
+        "segmentCount": 96
+      }
+    ],
     "quota": {
       "usedToday": 3,
       "dailyLimit": 40,
@@ -666,6 +691,16 @@ Frontend should display AI text from:
 2. fallback: `data.assistantMessage.text`
 3. fallback: `data.assistantMessage.message`
 4. fallback: `data.assistantMessage.content`
+
+AI metadata notes:
+
+- `data.ai.confidence` is a backend confidence score (`0..1`) based on context quality and provider type.
+- `data.ai.citations` is evidence metadata (video metadata + transcript availability) for explainability.
+- `data.ai.provider` can be: `gemini`, `fallback`, `rule-based`, `session-cache`.
+- Keep UI resilient: if `ai.confidence`/`ai.citations` are missing, continue rendering message normally.
+- `data.ai.quota` can also include:
+  - `globalUsedToday`
+  - `globalDailyLimit` (nullable if global cap disabled)
 
 #### 2) Fetch session messages
 
@@ -730,6 +765,7 @@ Response `data` includes both:
 - `answer`
 - `reply` (alias, same value)
 - `context` (context quality metadata)
+- `ai` (provider/model/quota + confidence + citations)
 
 #### 4) Generate summary
 
@@ -743,6 +779,7 @@ Response `data`:
 - `source` (`gemini` or `fallback`)
 - `model`
 - `quota`
+- `ai` (same structure as chat/ask responses for consistent UI bindings)
 
 #### 5) Transcript read/update/delete
 
@@ -790,6 +827,20 @@ Feedback notes:
 - `targetType` for reports: `VIDEO|COMMENT|USER|CHANNEL`
 - duplicate pending report for same target returns existing report instead of creating new
 - report + not-interested actions are logged into `UserEvent`
+
+## Internal Ops (not for public frontend)
+
+Base: `/api/v1/internal`
+
+| Method | Endpoint | Auth | Request |
+|---|---|---|---|
+| GET | `/usage` | token header | `x-internal-token: <INTERNAL_METRICS_TOKEN>` (or bearer) |
+
+Notes:
+
+- This endpoint is for internal observability only.
+- It returns runtime flags, queue stats, AI usage counters, cache/redis metrics snapshot.
+- Do not call this route from normal product UI traffic.
 
 ## Comments
 
@@ -1077,16 +1128,18 @@ Watch history notes:
 - Video creation is upload-session based. There is no direct `POST /api/v1/videos`.
 - Avatar/Cover update APIs require Cloudinary `publicId`, not file upload multipart.
 - Signature endpoint returns custom `resourceType` labels (`thumbnail`, `avatar`, `post`). For Cloudinary URL path, use `/image/upload` for non-video uploads.
-- Media finalize (`/api/v1/media/finalize/:sessionId`, legacy `/api/media/finalize/:sessionId`) trusts only `publicId` and verifies asset ownership on backend; do not send Cloudinary URL as source of truth.
+- Media finalize (`/api/v1/media/finalize/:sessionId`) trusts only `publicId` and verifies asset ownership on backend; do not send Cloudinary URL as source of truth.
 - Quality playback supports `AUTO`, `MAX`, and manual levels (`1080p`, `720p`, etc). Use `quality` query param for selection.
 - For account switch, frontend must persist `accountSwitchToken` per account (secure storage policy on frontend side).
 - AI APIs require authenticated user and respect daily quota limits.
 - AI responses can come from `gemini`, `rule-based`, or `session-cache` providers depending on request type and cache hit.
+- AI responses now include explainability metadata (`ai.confidence`, `ai.citations`).
 - Cache strategy is free-tier-safe by default:
   - L1 in-memory cache is primary.
   - Redis cache layer is disabled by default in production unless `CACHE_REDIS_ENABLED=true`.
   - Very short TTL cache keys can stay L1-only (`CACHE_REDIS_MIN_TTL_SECONDS`, default `60` in production).
   - Redis cache can be restricted by scope allowlist (`CACHE_REDIS_SCOPE_ALLOWLIST`).
+- Notification fanout has dedup guard (`NOTIFICATION_DEDUP_WINDOW_MINUTES`) to avoid duplicate writes/events in short windows.
 - Folder checks are strict in backend verification:
   - video finalize expects `videos/<userId>` and `thumbnails/<userId>`
   - avatar update expects `avatars/<userId>`

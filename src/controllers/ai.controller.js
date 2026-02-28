@@ -16,6 +16,7 @@ import {
   parseTranscriptInput,
   resolveTranscriptForRead,
 } from "../utils/transcript.js";
+import { metrics } from "../observability/usage.metrics.js";
 
 const MAX_SESSION_TITLE_LENGTH = 120;
 const MAX_USER_MESSAGE_LENGTH = 1500;
@@ -34,6 +35,10 @@ const parsePositiveInt = (value, fallbackValue) => {
 const DAILY_AI_MESSAGES_LIMIT = parsePositiveInt(
   process.env.AI_DAILY_MESSAGE_LIMIT,
   DEFAULT_DAILY_AI_MESSAGES_LIMIT
+);
+const GLOBAL_DAILY_AI_MESSAGES_LIMIT = parsePositiveInt(
+  process.env.AI_GLOBAL_DAILY_MESSAGE_LIMIT,
+  0
 );
 
 const normalizeText = (value) => String(value ?? "").trim();
@@ -162,6 +167,100 @@ const buildContextSourceReply = ({ video, contextMeta }) => {
     video.title,
     80
   )}". I do not directly watch raw video frames like a human viewer.`;
+};
+
+const estimateAiConfidence = ({
+  provider = "fallback",
+  hasTranscript = false,
+  hasSummary = false,
+  hasDescription = false,
+  usedFallback = false,
+}) => {
+  if (usedFallback || provider === "fallback") {
+    if (hasTranscript) return 0.62;
+    if (hasSummary || hasDescription) return 0.5;
+    return 0.35;
+  }
+
+  if (provider === "session-cache") {
+    return hasTranscript ? 0.78 : 0.64;
+  }
+
+  if (provider === "rule-based") {
+    return hasTranscript ? 0.72 : 0.58;
+  }
+
+  if (hasTranscript) return 0.86;
+  if (hasSummary || hasDescription) return 0.73;
+  return 0.55;
+};
+
+const buildAiCitations = ({
+  video = null,
+  contextMeta = null,
+  transcriptChars = 0,
+}) => {
+  const citations = [];
+
+  if (video) {
+    citations.push({
+      type: "VIDEO_METADATA",
+      videoId: video.id,
+      title: video.title,
+      fields: ["title", "description", "summary"],
+    });
+  }
+
+  if (contextMeta?.hasTranscript || transcriptChars > 0) {
+    citations.push({
+      type: "TRANSCRIPT",
+      available: true,
+      transcriptChars: transcriptChars || contextMeta?.transcriptChars || 0,
+      language: video?.transcriptMeta?.language || null,
+      source: video?.transcriptMeta?.source || null,
+      wordCount: video?.transcriptMeta?.wordCount || 0,
+      segmentCount: video?.transcriptMeta?.segmentCount || 0,
+    });
+  } else {
+    citations.push({
+      type: "TRANSCRIPT",
+      available: false,
+    });
+  }
+
+  return citations;
+};
+
+const buildAiMeta = ({
+  provider = "fallback",
+  model = "none",
+  warning = null,
+  quota = null,
+  video = null,
+  contextMeta = null,
+  transcriptChars = 0,
+  usedFallback = false,
+}) => {
+  const confidence = estimateAiConfidence({
+    provider,
+    hasTranscript: Boolean(contextMeta?.hasTranscript),
+    hasSummary: Boolean(contextMeta?.hasSummary),
+    hasDescription: Boolean(contextMeta?.hasDescription),
+    usedFallback,
+  });
+
+  return {
+    provider,
+    model,
+    warning: warning || null,
+    quota: quota || null,
+    confidence,
+    citations: buildAiCitations({
+      video,
+      contextMeta,
+      transcriptChars,
+    }),
+  };
 };
 
 const buildVideoContextText = ({
@@ -403,12 +502,40 @@ const ensureAiDailyQuota = async (userId) => {
   });
 
   if (usedCount >= DAILY_AI_MESSAGES_LIMIT) {
+    metrics.recordAiQuotaRejected({ global: false });
     throw new ApiError(429, "AI daily limit reached. Try again tomorrow.");
+  }
+
+  let globalUsedCount = null;
+  if (GLOBAL_DAILY_AI_MESSAGES_LIMIT > 0) {
+    globalUsedCount = await prisma.backgroundJob.count({
+      where: {
+        jobType: {
+          in: ["AI_CHAT", "AI_SUMMARY"],
+        },
+        createdAt: {
+          gte: dayStart,
+        },
+      },
+    });
+
+    if (globalUsedCount >= GLOBAL_DAILY_AI_MESSAGES_LIMIT) {
+      metrics.recordAiQuotaRejected({ global: true });
+      throw new ApiError(
+        503,
+        "AI is temporarily at capacity. Please try again later."
+      );
+    }
   }
 
   return {
     used: usedCount,
     limit: DAILY_AI_MESSAGES_LIMIT,
+    global: {
+      used: globalUsedCount,
+      limit:
+        GLOBAL_DAILY_AI_MESSAGES_LIMIT > 0 ? GLOBAL_DAILY_AI_MESSAGES_LIMIT : null,
+    },
   };
 };
 
@@ -744,6 +871,7 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
       return { userMessage, assistantMessage };
     });
 
+    metrics.recordAiRequest({ provider: "session-cache", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -754,12 +882,16 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
           reply: created.assistantMessage?.content || "",
           answer: created.assistantMessage?.content || "",
           context: contextMeta,
-          ai: {
+          ai: buildAiMeta({
             provider: "session-cache",
             model: "none",
             warning: null,
             quota: null,
-          },
+            video,
+            contextMeta,
+            transcriptChars: video?.transcriptText?.length || 0,
+            usedFallback: false,
+          }),
         },
         "AI response generated (cached)"
       )
@@ -806,6 +938,7 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
       return { userMessage, assistantMessage };
     });
 
+    metrics.recordAiRequest({ provider: "rule-based", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -816,12 +949,16 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
           reply: created.assistantMessage?.content || "",
           answer: created.assistantMessage?.content || "",
           context: contextMeta,
-          ai: {
+          ai: buildAiMeta({
             provider: "rule-based",
             model: "none",
             warning: null,
             quota: null,
-          },
+            video,
+            contextMeta,
+            transcriptChars: video?.transcriptText?.length || 0,
+            usedFallback: false,
+          }),
         },
         "AI response generated"
       )
@@ -868,6 +1005,7 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
       return { userMessage, assistantMessage };
     });
 
+    metrics.recordAiRequest({ provider: "rule-based", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -878,12 +1016,16 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
           reply: created.assistantMessage?.content || "",
           answer: created.assistantMessage?.content || "",
           context: contextMeta,
-          ai: {
+          ai: buildAiMeta({
             provider: "rule-based",
             model: "none",
             warning: null,
             quota: null,
-          },
+            video,
+            contextMeta,
+            transcriptChars: video?.transcriptText?.length || 0,
+            usedFallback: false,
+          }),
         },
         "AI response generated"
       )
@@ -932,6 +1074,10 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     temperature: 0.35,
     maxOutputTokens: 500,
     fallbackText,
+  });
+  metrics.recordAiRequest({
+    provider: aiReply.provider,
+    fallback: aiReply.provider === "fallback",
   });
 
   const created = await prisma.$transaction(async (tx) => {
@@ -982,6 +1128,14 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     },
   }).catch(() => null);
 
+  const quotaPayload = {
+    usedToday: quota.used + 1,
+    dailyLimit: quota.limit,
+    remaining: Math.max(0, quota.limit - (quota.used + 1)),
+    globalUsedToday: quota.global.used,
+    globalDailyLimit: quota.global.limit,
+  };
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -992,16 +1146,16 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
         reply: created.assistantMessage?.content || "",
         answer: created.assistantMessage?.content || "",
         context: contextMeta,
-        ai: {
+        ai: buildAiMeta({
           provider: aiReply.provider,
           model: aiReply.model,
           warning: aiReply.warning || null,
-          quota: {
-            usedToday: quota.used + 1,
-            dailyLimit: quota.limit,
-            remaining: Math.max(0, quota.limit - (quota.used + 1)),
-          },
-        },
+          quota: quotaPayload,
+          video,
+          contextMeta,
+          transcriptChars: transcriptContext.length,
+          usedFallback: aiReply.provider === "fallback",
+        }),
       },
       "AI response generated"
     )
@@ -1249,6 +1403,7 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
   });
 
   if (!force && video.summary) {
+    metrics.recordAiRequest({ provider: "existing-summary", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -1299,6 +1454,10 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
     maxOutputTokens: 450,
     fallbackText: fallbackSummary,
   });
+  metrics.recordAiRequest({
+    provider: aiResult.provider,
+    fallback: aiResult.provider === "fallback",
+  });
 
   const updated = await prisma.video.update({
     where: { id: video.id },
@@ -1322,6 +1481,14 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
     },
   }).catch(() => null);
 
+  const summaryQuotaPayload = {
+    usedToday: quota.used + 1,
+    dailyLimit: quota.limit,
+    remaining: Math.max(0, quota.limit - (quota.used + 1)),
+    globalUsedToday: quota.global.used,
+    globalDailyLimit: quota.global.limit,
+  };
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -1332,11 +1499,17 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
         model: aiResult.model,
         warning: aiResult.warning || null,
         context: contextMeta,
-        quota: {
-          usedToday: quota.used + 1,
-          dailyLimit: quota.limit,
-          remaining: Math.max(0, quota.limit - (quota.used + 1)),
-        },
+        quota: summaryQuotaPayload,
+        ai: buildAiMeta({
+          provider: aiResult.provider,
+          model: aiResult.model,
+          warning: aiResult.warning || null,
+          quota: summaryQuotaPayload,
+          video,
+          contextMeta,
+          transcriptChars: transcriptContext.length,
+          usedFallback: aiResult.provider === "fallback",
+        }),
         updatedAt: updated.updatedAt,
       },
       "Video summary generated"
@@ -1360,6 +1533,7 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
 
   if (isGreetingOrSmallTalk(question)) {
     const answerText = buildSmallTalkReply({ video, contextMeta });
+    metrics.recordAiRequest({ provider: "rule-based", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -1369,12 +1543,16 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
           answer: answerText,
           reply: answerText,
           context: contextMeta,
-          ai: {
+          ai: buildAiMeta({
             provider: "rule-based",
             model: "none",
             warning: null,
             quota: null,
-          },
+            video,
+            contextMeta,
+            transcriptChars: video?.transcriptText?.length || 0,
+            usedFallback: false,
+          }),
         },
         "AI answer generated"
       )
@@ -1383,6 +1561,7 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
 
   if (isContextSourceQuestion(question)) {
     const answerText = buildContextSourceReply({ video, contextMeta });
+    metrics.recordAiRequest({ provider: "rule-based", fallback: false });
     return res.status(200).json(
       new ApiResponse(
         200,
@@ -1392,12 +1571,16 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
           answer: answerText,
           reply: answerText,
           context: contextMeta,
-          ai: {
+          ai: buildAiMeta({
             provider: "rule-based",
             model: "none",
             warning: null,
             quota: null,
-          },
+            video,
+            contextMeta,
+            transcriptChars: video?.transcriptText?.length || 0,
+            usedFallback: false,
+          }),
         },
         "AI answer generated"
       )
@@ -1441,6 +1624,10 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
     maxOutputTokens: 400,
     fallbackText: fallbackAnswer,
   });
+  metrics.recordAiRequest({
+    provider: aiResult.provider,
+    fallback: aiResult.provider === "fallback",
+  });
 
   await recordAiUsage({
     userId,
@@ -1453,6 +1640,14 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
     },
   }).catch(() => null);
 
+  const questionQuotaPayload = {
+    usedToday: quota.used + 1,
+    dailyLimit: quota.limit,
+    remaining: Math.max(0, quota.limit - (quota.used + 1)),
+    globalUsedToday: quota.global.used,
+    globalDailyLimit: quota.global.limit,
+  };
+
   return res.status(200).json(
     new ApiResponse(
       200,
@@ -1462,16 +1657,16 @@ export const askVideoQuestion = asyncHandler(async (req, res) => {
         answer: aiResult.text,
         reply: aiResult.text,
         context: contextMeta,
-        ai: {
+        ai: buildAiMeta({
           provider: aiResult.provider,
           model: aiResult.model,
           warning: aiResult.warning || null,
-          quota: {
-            usedToday: quota.used + 1,
-            dailyLimit: quota.limit,
-            remaining: Math.max(0, quota.limit - (quota.used + 1)),
-          },
-        },
+          quota: questionQuotaPayload,
+          video,
+          contextMeta,
+          transcriptChars: transcriptContext.length,
+          usedFallback: aiResult.provider === "fallback",
+        }),
       },
       "AI answer generated"
     )

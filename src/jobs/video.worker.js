@@ -7,6 +7,7 @@ import {
 } from "../queue/redis.connection.js";
 import { closeVideoQueue } from "../queue/video.queue.js";
 import prisma from "../db/prisma.js";
+import { metrics } from "../observability/usage.metrics.js";
 import { generateVideoThumbnail } from "../utils/cloudinaryThumbnail.js";
 import { buildVideoStreamingPayload } from "../utils/videoQuality.js";
 import {
@@ -265,6 +266,7 @@ export const startVideoWorker = async ({ force = false } = {}) => {
     if (isRedisQuotaExceededError(err)) {
       if (!quotaShutdownInProgress) {
         quotaShutdownInProgress = true;
+        metrics.recordWorkerEvent("quotaShutdowns");
         console.error(
           "Video worker disabled due to Upstash command limit. Set RUN_WORKER=false or upgrade/reset Redis quota."
         );
@@ -281,12 +283,14 @@ export const startVideoWorker = async ({ force = false } = {}) => {
     }
 
     if (isTransientRedisError(err)) {
+      metrics.recordWorkerEvent("runtimeErrors");
       if (shouldLogWorkerError()) {
         console.warn("Video worker transient runtime error:", message);
       }
       return;
     }
 
+    metrics.recordWorkerEvent("runtimeErrors");
     if (shouldLogWorkerError()) {
       console.error("Video worker runtime error:", message);
     }
@@ -306,6 +310,7 @@ export const startVideoWorker = async ({ force = false } = {}) => {
   });
 
   console.log("Cloudinary background worker started.");
+  metrics.recordWorkerEvent("started");
 
   if (shouldRunWorkerOnDemand) {
     scheduleIdleShutdown();
@@ -329,6 +334,7 @@ export const stopVideoWorker = async () => {
   await closeVideoQueue();
   await closeRedisConnection();
   quotaShutdownInProgress = false;
+  metrics.recordWorkerEvent("stopped");
 
   console.log("Cloudinary background worker stopped.");
 };
