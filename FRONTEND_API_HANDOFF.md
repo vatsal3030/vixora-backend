@@ -3,6 +3,10 @@
 Last updated: 2026-02-28
 Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`
 
+For implementation-depth frontend guidance (route selection, per-screen call sequence, admin UI blueprint, role assignment flow), read:
+
+- `FRONTEND_INTEGRATION_PLAYBOOK.md`
+
 ## 1) Base URL and Global Behavior
 
 - API base: `/api/v1`
@@ -841,6 +845,115 @@ Notes:
 - This endpoint is for internal observability only.
 - It returns runtime flags, queue stats, AI usage counters, cache/redis metrics snapshot.
 - Do not call this route from normal product UI traffic.
+
+## Admin
+
+Base: `/api/v1/admin` (protected; requires admin role)
+
+Admin role model:
+
+- `MODERATOR`: can moderate content + resolve reports + set user status `ACTIVE|RESTRICTED`
+- `ADMIN`: moderator permissions + user suspend/delete/restore + verify pending email
+- `SUPER_ADMIN`: admin permissions + role updates
+
+All endpoints below require:
+
+- valid auth (`accessToken`)
+- admin panel enabled (`ADMIN_PANEL_ENABLED`)
+- account role in `MODERATOR|ADMIN|SUPER_ADMIN`
+
+### Admin session/profile
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/me` | Current admin profile + permission list |
+
+### Admin dashboard
+
+| Method | Endpoint | Query |
+|---|---|---|
+| GET | `/dashboard/overview` | `period=7d|30d|90d|1y` |
+| GET | `/dashboard/activity` | `period=7d|30d|90d|1y` |
+
+### Reports moderation
+
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/reports` | query: `page,limit,status,targetType,q,sortBy,sortType,from,to` |
+| GET | `/reports/:reportId` | none |
+| PATCH | `/reports/:reportId/resolve` | body: `{ status, note?, action? }` |
+
+`status` must be one of:
+
+- `REVIEWED`
+- `REJECTED`
+- `ACTION_TAKEN`
+
+`action` supports moderation commands:
+
+- `USER_SET_STATUS`
+- `USER_SOFT_DELETE`
+- `USER_RESTORE`
+- `USER_VERIFY_PENDING_EMAIL`
+- `VIDEO_UNPUBLISH`
+- `VIDEO_PUBLISH`
+- `VIDEO_SOFT_DELETE`
+- `VIDEO_RESTORE`
+- `TWEET_SOFT_DELETE`
+- `TWEET_RESTORE`
+- `COMMENT_SOFT_DELETE`
+- `COMMENT_RESTORE`
+- `PLAYLIST_SOFT_DELETE`
+- `PLAYLIST_RESTORE`
+
+### Users moderation
+
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/users` | query: `page,limit,q,status,role,isDeleted,sortBy,sortType` |
+| GET | `/users/:userId` | none |
+| PATCH | `/users/:userId/status` | body: `{ status: ACTIVE|RESTRICTED|SUSPENDED, reason }` |
+| PATCH | `/users/:userId/verify-pending-email` | body: `{ reason? }` |
+| PATCH | `/users/:userId/soft-delete` | body: `{ reason }` |
+| PATCH | `/users/:userId/restore` | body: `{ reason? }` |
+| PATCH | `/users/:userId/role` | body: `{ role: USER|MODERATOR|ADMIN|SUPER_ADMIN, reason? }` |
+
+### Content moderation
+
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/videos` | query: `page,limit,q,ownerId,isShort,isPublished,isDeleted,processingStatus,sortBy,sortType` |
+| GET | `/videos/:videoId` | none |
+| PATCH | `/videos/:videoId/unpublish` | body: `{ reason? }` |
+| PATCH | `/videos/:videoId/publish` | body: `{ reason? }` |
+| PATCH | `/videos/:videoId/soft-delete` | body: `{ reason }` |
+| PATCH | `/videos/:videoId/restore` | body: `{ reason? }` |
+| GET | `/tweets` | query: `page,limit,q,ownerId,isDeleted,sortBy,sortType` |
+| GET | `/tweets/:tweetId` | none |
+| PATCH | `/tweets/:tweetId/soft-delete` | body: `{ reason }` |
+| PATCH | `/tweets/:tweetId/restore` | body: `{ reason? }` |
+| GET | `/comments` | query: `page,limit,q,ownerId,videoId,isDeleted,sortBy,sortType` |
+| GET | `/comments/:commentId` | none |
+| PATCH | `/comments/:commentId/soft-delete` | body: `{ reason }` |
+| PATCH | `/comments/:commentId/restore` | body: `{ reason? }` |
+| GET | `/playlists` | query: `page,limit,q,ownerId,isDeleted,isPublic,sortBy,sortType` |
+| GET | `/playlists/:playlistId` | none |
+| PATCH | `/playlists/:playlistId/soft-delete` | body: `{ reason }` |
+| PATCH | `/playlists/:playlistId/restore` | body: `{ reason? }` |
+
+### Audit logs
+
+| Method | Endpoint | Request |
+|---|---|---|
+| GET | `/audit-logs` | query: `page,limit,actorId,action,targetType,targetId,from,to,sortBy,sortType` |
+| GET | `/audit-logs/:logId` | none |
+
+Admin moderation policy notes:
+
+- Admin delete actions are soft-delete only.
+- Restore is allowed only within 7 days of `deletedAt`.
+- Last remaining `SUPER_ADMIN` cannot be demoted.
+- Mutating APIs are blocked for non-admin users with `moderationStatus=RESTRICTED|SUSPENDED` (read-only mode).
 
 ## Comments
 

@@ -3,12 +3,22 @@ import asyncHandler from "../utils/asyncHandler.js";
 import jwt from "jsonwebtoken";
 import userSafeSelect from "../utils/userSafeSelect.js";
 import prisma from "../db/prisma.js";
+import { writeAccessGuard } from "./admin.middleware.js";
+
+const parseBearerToken = (authorizationHeader) => {
+    const raw = String(authorizationHeader || "").trim();
+    if (!raw) return "";
+    const match = raw.match(/^Bearer\s+(.+)$/i);
+    if (!match) return "";
+    const token = String(match[1] || "").trim();
+    return token || "";
+};
 
 export const verifyJwt = asyncHandler(async (req, res, next) => {
     try {
         const token =
             req.cookies?.accessToken ||
-            req.header("Authorization")?.replace("Bearer ", "");
+            parseBearerToken(req.header("Authorization"));
 
         if (!token) {
             return res.status(401).json({
@@ -48,7 +58,7 @@ export const verifyJwt = asyncHandler(async (req, res, next) => {
         }
 
         req.user = user;
-        next();
+        return writeAccessGuard(req, res, next);
     } catch (error) {
         if (error instanceof ApiError) {
             return res.status(error.statusCode || 401).json({
@@ -81,7 +91,7 @@ export const verifyJwt = asyncHandler(async (req, res, next) => {
 export const optionalJwt = asyncHandler(async (req, res, next) => {
     const token =
         req.cookies?.accessToken ||
-        req.header("Authorization")?.replace("Bearer ", "");
+        parseBearerToken(req.header("Authorization"));
 
     if (!token) {
         return next();

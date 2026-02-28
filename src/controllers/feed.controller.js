@@ -69,6 +69,52 @@ const parseBooleanQuery = (value) => {
     return undefined;
 };
 
+const normalizeNotClauses = (existingNot) => {
+    if (!existingNot) return [];
+    if (Array.isArray(existingNot)) return existingNot;
+    return [existingNot];
+};
+
+const addNotInVideoIds = (where, videoIds = []) => {
+    const ids = [...new Set((videoIds || []).filter(Boolean))];
+    if (ids.length === 0) return where;
+
+    const baseNot = normalizeNotClauses(where?.NOT);
+    return {
+        ...where,
+        NOT: [...baseNot, { id: { in: ids } }],
+    };
+};
+
+const toStableSeed = (input) => {
+    const raw = String(input || "");
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i += 1) {
+        hash ^= raw.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+};
+
+const seededShuffle = (items, seedInput) => {
+    const arr = Array.isArray(items) ? [...items] : [];
+    if (arr.length <= 1) return arr;
+
+    let seed = toStableSeed(seedInput) || 1;
+    const rand = () => {
+        seed = Math.imul(seed, 1664525) + 1013904223;
+        seed >>>= 0;
+        return seed / 4294967296;
+    };
+
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(rand() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+
+    return arr;
+};
+
 const getSuppressionFilterForUser = async (userId) => {
     if (!userId) {
         return {
@@ -284,8 +330,14 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             }
             : null;
 
-    let activeWhereClause = whereClause;
+    const fallbackOrderBy =
+        sortBy === "createdAt"
+            ? [{ createdAt: sortType }]
+            : [{ [sortBy]: sortType }, { createdAt: "desc" }];
+
     let videos = [];
+    let personalizedCount = 0;
+    let usedBackfill = false;
 
     if (personalizedWhereClause) {
         videos = await prisma.video.findMany({
@@ -298,23 +350,65 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             take: safeLimit,
             select: HOME_FEED_SELECT
         });
-        activeWhereClause = personalizedWhereClause;
+
+        // We still return full feed pagination/count and not only personalized subset.
+        personalizedCount = await prisma.video.count({
+            where: personalizedWhereClause,
+        });
     }
 
-    if (videos.length === 0) {
-        const fallbackOrderBy =
-            sortBy === "createdAt"
-                ? [{ createdAt: sortType }]
-                : [{ [sortBy]: sortType }, { createdAt: "desc" }];
+    // Backfill with exploration candidates when personalized pool is insufficient.
+    if (videos.length < safeLimit) {
+        const remaining = safeLimit - videos.length;
+        const alreadyAddedIds = videos.map((row) => row.id);
 
-        videos = await prisma.video.findMany({
-            where: whereClause,
+        const exploreSkip = Math.max(0, skip - personalizedCount);
+        const explorePoolTake = Math.max(remaining * 4, 24);
+        const backfillWhere = addNotInVideoIds(whereClause, alreadyAddedIds);
+
+        const backfillPool = await prisma.video.findMany({
+            where: backfillWhere,
+            orderBy: fallbackOrderBy,
+            skip: exploreSkip,
+            take: explorePoolTake,
+            select: HOME_FEED_SELECT,
+        });
+
+        // Deterministic shuffle gives diversity while remaining cache-friendly.
+        const dayKey = new Date().toISOString().slice(0, 10);
+        const shuffledBackfill = seededShuffle(
+            backfillPool,
+            `${userId || "anon"}:${safePage}:${safeLimit}:${dayKey}`
+        );
+
+        videos = [...videos, ...shuffledBackfill.slice(0, remaining)];
+        usedBackfill = true;
+    } else if (personalizedWhereClause && videos.length === safeLimit && safeLimit >= 5) {
+        // Even with strong personalization, keep a small exploration slice
+        // to avoid overfitting and improve discovery.
+        const exploreCount = Math.max(1, Math.floor(safeLimit * 0.2));
+        const backfillWhere = addNotInVideoIds(whereClause, videos.map((row) => row.id));
+        const explorePool = await prisma.video.findMany({
+            where: backfillWhere,
             orderBy: fallbackOrderBy,
             skip,
-            take: safeLimit,
-            select: HOME_FEED_SELECT
+            take: Math.max(exploreCount * 4, 12),
+            select: HOME_FEED_SELECT,
         });
-        activeWhereClause = whereClause;
+
+        if (explorePool.length > 0) {
+            const dayKey = new Date().toISOString().slice(0, 10);
+            const exploration = seededShuffle(
+                explorePool,
+                `${userId || "anon"}:${safePage}:${safeLimit}:explore:${dayKey}`
+            ).slice(0, exploreCount);
+
+            if (exploration.length > 0) {
+                const keepCount = Math.max(0, safeLimit - exploration.length);
+                videos = [...videos.slice(0, keepCount), ...exploration];
+                usedBackfill = true;
+            }
+        }
     }
 
 
@@ -327,7 +421,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // Total count for pagination
     // -------------------------------
     const totalVideos = await prisma.video.count({
-        where: activeWhereClause
+        where: whereClause
     });
 
     const responseData = buildPaginatedListData({
@@ -341,6 +435,8 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
                 sortType,
                 blockedChannels: suppression.blockedChannelIds.length,
                 hiddenVideos: suppression.notInterestedVideoIds.length,
+                personalizedMatches: personalizedCount,
+                usedBackfill,
             }
         }
     });

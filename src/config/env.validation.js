@@ -43,6 +43,9 @@ const envSchema = z
     CLOUDINARY_CLOUD_NAME: z.string().optional(),
     CLOUDINARY_API_KEY: z.string().optional(),
     CLOUDINARY_API_SECRET: z.string().optional(),
+    ADMIN_PANEL_ENABLED: z.string().optional(),
+    ADMIN_BOOTSTRAP_EMAILS: z.string().optional(),
+    ADMIN_FRONTEND_URL: z.string().optional(),
   })
   .passthrough();
 
@@ -119,6 +122,17 @@ export const validateRuntimeEnv = () => {
     pushIssue(errors, "REFRESH_TOKEN_SECRET is required");
   }
 
+  const adminPanelEnabled = parseBool(
+    env.ADMIN_PANEL_ENABLED,
+    (cleanEnv(env.NODE_ENV) || "development") !== "production"
+  );
+  if (adminPanelEnabled && !cleanEnv(env.ADMIN_BOOTSTRAP_EMAILS) && nodeEnv === "production") {
+    pushIssue(
+      warnings,
+      "ADMIN_PANEL_ENABLED=true in production without ADMIN_BOOTSTRAP_EMAILS. Ensure at least one admin user already exists."
+    );
+  }
+
   if (cleanEnv(env.CORS_ORIGIN).includes("CORS_ORIGIN=")) {
     pushIssue(
       warnings,
@@ -181,6 +195,17 @@ export const validateRuntimeEnv = () => {
     pushIssue(
       warnings,
       "FRONTEND_URL is not included in CORS_ORIGIN. Cookie-based auth may fail on web."
+    );
+  }
+
+  if (
+    cleanEnv(env.ADMIN_FRONTEND_URL) &&
+    cleanEnv(env.CORS_ORIGIN) &&
+    !includesOrigin(env.CORS_ORIGIN, env.ADMIN_FRONTEND_URL)
+  ) {
+    pushIssue(
+      warnings,
+      "ADMIN_FRONTEND_URL is not included in CORS_ORIGIN. Admin panel cookies/CORS may fail."
     );
   }
 

@@ -8,6 +8,11 @@ const userSafeSelect = {
 
   emailVerified: true,
   authProvider: true,
+  role: true,
+  moderationStatus: true,
+  moderationReason: true,
+  moderatedAt: true,
+  moderatedById: true,
 
   createdAt: true,
   updatedAt: true,

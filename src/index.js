@@ -5,6 +5,7 @@ import prisma from "./db/prisma.js";
 import { parseAllowedOrigins } from "./config/cors.config.js";
 import { validateRuntimeEnv } from "./config/env.validation.js";
 import { initSocketServer } from "./realtime/socket.server.js";
+import { bootstrapAdminUsers } from "./services/admin.bootstrap.service.js";
 
 const PORT = process.env.PORT || 5000;
 validateRuntimeEnv();
@@ -37,8 +38,12 @@ async function startServer() {
     await prisma.$connect();
     console.log("Database connected");
 
+    await bootstrapAdminUsers();
+
     const httpServer = createServer(app);
-    const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN);
+    const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN, [
+      process.env.ADMIN_FRONTEND_URL,
+    ]);
     initSocketServer({ httpServer, allowedOrigins });
 
     const server = httpServer.listen(PORT, () => {

@@ -1,0 +1,31 @@
+export const adminBaseUserSelect = {
+  id: true,
+  fullName: true,
+  username: true,
+  email: true,
+  avatar: true,
+  coverImage: true,
+  channelDescription: true,
+  channelLinks: true,
+  emailVerified: true,
+  role: true,
+  moderationStatus: true,
+  moderationReason: true,
+  moderatedAt: true,
+  moderatedById: true,
+  pendingEmail: true,
+  pendingEmailOtpExpiresAt: true,
+  isDeleted: true,
+  deletedAt: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+export const adminModeratedBySelect = {
+  id: true,
+  fullName: true,
+  username: true,
+  email: true,
+  avatar: true,
+  role: true,
+};

@@ -27,6 +27,7 @@ import aiRoutes from "./routes/ai.routes.js";
 import feedbackRoutes from "./routes/feedback.routes.js";
 import searchRoutes from "./routes/search.routes.js";
 import internalRoutes from "./routes/internal.routes.js";
+import adminRouter from "./routes/admin.routes.js";
 import { normalizeOrigin, parseAllowedOrigins } from "./config/cors.config.js";
 
 import passport from "passport";
@@ -40,7 +41,9 @@ app.disable("x-powered-by");
 /* ---------- GLOBAL MIDDLEWARE ---------- */
 app.use(helmet());
 
-const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN);
+const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN, [
+  process.env.ADMIN_FRONTEND_URL,
+]);
 app.set("allowedOrigins", allowedOrigins);
 
 
@@ -105,6 +108,7 @@ app.use("/api/v1/ai", aiRoutes);
 app.use("/api/v1/feedback", feedbackRoutes);
 app.use("/api/v1/search", searchRoutes);
 app.use("/api/v1/internal", internalRoutes);
+app.use("/api/v1/admin", adminRouter);
 
 
 app.get("/", (req, res) => {

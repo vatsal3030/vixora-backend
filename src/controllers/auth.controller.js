@@ -24,6 +24,16 @@ const getOAuthCallbackUrl = (req) => {
     String(process.env.GOOGLE_FORCE_CALLBACK_URL || "").toLowerCase() ===
     "true";
   const configuredCallback = process.env.GOOGLE_CALLBACK_URL;
+  const isProd = process.env.NODE_ENV === "production";
+
+  // Production should never derive callback URL from request host
+  // (host-header ambiguity / proxy mismatch risks).
+  if (isProd) {
+    if (!configuredCallback) {
+      throw new ApiError(500, "GOOGLE_CALLBACK_URL missing");
+    }
+    return configuredCallback;
+  }
 
   if (forceConfiguredCallback && configuredCallback) {
     return configuredCallback;

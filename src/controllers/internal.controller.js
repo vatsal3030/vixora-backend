@@ -13,6 +13,13 @@ import {
 import { getVideoQueue } from "../queue/video.queue.js";
 
 const normalizeToken = (value) => String(value || "").trim();
+const parseBearerToken = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  if (!match) return "";
+  return String(match[1] || "").trim();
+};
 
 const assertInternalAuth = (req) => {
   const expectedToken = normalizeToken(process.env.INTERNAL_METRICS_TOKEN);
@@ -22,7 +29,7 @@ const assertInternalAuth = (req) => {
 
   const provided =
     normalizeToken(req.header("x-internal-token")) ||
-    normalizeToken(req.header("authorization")).replace(/^Bearer\s+/i, "");
+    parseBearerToken(req.header("authorization"));
 
   if (!provided || provided !== expectedToken) {
     throw new ApiError(401, "Unauthorized");
@@ -120,4 +127,3 @@ export const getInternalUsage = asyncHandler(async (req, res) => {
     )
   );
 });
-

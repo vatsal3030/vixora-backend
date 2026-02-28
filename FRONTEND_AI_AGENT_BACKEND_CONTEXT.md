@@ -3,6 +3,10 @@
 Last verified: 2026-02-28  
 Source of truth: `Backend/src/app.js`, `Backend/src/routes/*`, `Backend/src/controllers/*`, `Backend/prisma/schema.prisma`
 
+For frontend build execution details and admin panel product blueprint, use:
+
+- `Backend/FRONTEND_INTEGRATION_PLAYBOOK.md`
+
 This document is designed for frontend AI agents that need to understand not only endpoint names, but also backend behavior, flow constraints, security checks, and edge cases.
 
 Use this together with `Backend/FRONTEND_API_HANDOFF.md`:
@@ -125,6 +129,7 @@ Use this when AI agent needs source inspection.
 - AI: `src/routes/ai.routes.js` -> `src/controllers/ai.controller.js` + `src/services/ai.service.js`
 - Feedback: `src/routes/feedback.routes.js` -> `src/controllers/feedback.controller.js`
 - Internal ops: `src/routes/internal.routes.js` -> `src/controllers/internal.controller.js`
+- Admin: `src/routes/admin.routes.js` -> `src/controllers/admin/*`
 
 ## 5) Critical End-to-End Flows
 
@@ -362,6 +367,43 @@ Behavior:
 - Duplicate pending report for same reporter+target returns existing pending report response
 - User events are logged for `NOT_INTERESTED` and `REPORT`
 
+### 5.15 Admin Panel Backend
+
+Base:
+
+- `/api/v1/admin`
+
+Required middleware chain:
+
+- `verifyJwt`
+- `ensureAdminPanelEnabled`
+- `verifyAdmin`
+
+Role gates:
+
+- `MODERATOR`: content moderation + report triage + restricted user status updates
+- `ADMIN`: moderator + user suspend/delete/restore + pending-email approval
+- `SUPER_ADMIN`: admin + role updates
+
+Core admin modules:
+
+- dashboard: overview/activity
+- reports: list/detail/resolve with optional moderation action execution
+- users: status/delete/restore/role/pending-email admin operations
+- content: videos/tweets/comments/playlists moderation
+- audit logs: mutation/read tracking
+
+Audit model:
+
+- `AdminAuditLog` records actor/action/target/before/after/request metadata
+- write operations are always audited
+- key admin reads (report detail, user detail, audit reads) are also audited
+
+Panel exposure:
+
+- controlled by `ADMIN_PANEL_ENABLED`
+- startup bootstrap can auto-promote initial `SUPER_ADMIN` users from `ADMIN_BOOTSTRAP_EMAILS`
+
 ## 6) Caching, Queue, and Free-Tier Behavior
 
 ### 6.1 Cache
@@ -390,6 +432,14 @@ Queue/worker:
 Notifications:
 
 - Channel activity notifications use dedup window (`NOTIFICATION_DEDUP_WINDOW_MINUTES`) to reduce duplicate DB writes + socket emits.
+
+### 6.3 Moderation write guard
+
+`writeAccessGuard` is enforced during `verifyJwt` for non-admin users:
+
+- if `moderationStatus` is `RESTRICTED` or `SUSPENDED`, mutating requests are blocked
+- allowed exceptions: logout and account-switch routes
+- read routes remain allowed (read-only suspension behavior)
 
 ## 7) Frontend AI Agent Integration Rules
 
@@ -426,6 +476,9 @@ Backend critical env (frontend-impact):
 - `INTERNAL_METRICS_TOKEN` (for internal usage endpoint)
 - `ENV_VALIDATE_STRICT` (optional; production defaults strict)
 - `NOTIFICATION_DEDUP_WINDOW_MINUTES` (ops cost control)
+- `ADMIN_PANEL_ENABLED`
+- `ADMIN_BOOTSTRAP_EMAILS`
+- `ADMIN_FRONTEND_URL`
 
 Frontend env alignment:
 

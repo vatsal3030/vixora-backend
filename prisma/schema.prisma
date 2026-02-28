@@ -7,56 +7,67 @@ datasource db {
 }
 
 model User {
-  id                       String                 @id @default(uuid())
-  username                 String?                @unique
-  email                    String?                @unique
+  id                       String                  @id @default(uuid())
+  username                 String?                 @unique
+  email                    String?                 @unique
   fullName                 String
   avatar                   String?
   coverImage               String?
   password                 String?
   refreshToken             String?
-  authProvider             AuthProvider           @default(LOCAL)
+  authProvider             AuthProvider            @default(LOCAL)
   providerId               String?
-  emailVerified            Boolean                @default(false)
+  emailVerified            Boolean                 @default(false)
   otpHash                  String?
   otpExpiresAt             DateTime?
-  createdAt                DateTime               @default(now())
-  updatedAt                DateTime               @updatedAt
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
   avatarPublicId           String?
   coverImagePublicId       String?
   channelDescription       String?
   channelLinks             Json?
   deletedAt                DateTime?
-  isDeleted                Boolean                @default(false)
-  otpAttempts              Int                    @default(0)
+  isDeleted                Boolean                 @default(false)
+  otpAttempts              Int                     @default(0)
   otpLastSentAt            DateTime?
   pendingEmail             String?
   pendingEmailOtpHash      String?
   pendingEmailOtpExpiresAt DateTime?
+  role                     UserRole                @default(USER)
+  moderationStatus         AccountModerationStatus @default(ACTIVE)
+  moderationReason         String?
+  moderatedAt              DateTime?
+  moderatedById            String?
   aichatSessions           AIChatSession[]
+  adminAuditLogs           AdminAuditLog[]         @relation("AdminAuditActor")
   channelCategories        ChannelCategory[]
   comments                 Comment[]
   feedScores               FeedScore[]
   feedTrainingSnapshots    FeedTrainingSnapshot[]
   likes                    Like[]
-  sentNotifications        Notification[]         @relation("NotificationSender")
-  notifications            Notification[]         @relation("UserNotifications")
+  sentNotifications        Notification[]          @relation("NotificationSender")
+  notifications            Notification[]          @relation("UserNotifications")
   playlists                Playlist[]
   reportsMade              Report[]
+  reportsResolved          Report[]                @relation("ReportResolvedBy")
   searchHistories          SearchHistory[]
-  subscribers              Subscription[]         @relation("UserSubscribers")
-  subscriptions            Subscription[]         @relation("UserSubscriptions")
+  subscribers              Subscription[]          @relation("UserSubscribers")
+  subscriptions            Subscription[]          @relation("UserSubscriptions")
   tweets                   Tweet[]
   uploadSessions           UploadSession[]
+  moderatedBy              User?                   @relation("UserModeratedBy", fields: [moderatedById], references: [id])
+  moderatedUsers           User[]                  @relation("UserModeratedBy")
   events                   UserEvent[]
   userFeatureOverrides     UserFeatureOverride[]
   settings                 UserSettings?
-  videos                   Video[]                @relation("VideoOwner")
-  watchHistory             WatchHistory[]         @relation("UserWatchHistory")
+  videos                   Video[]                 @relation("VideoOwner")
+  watchHistory             WatchHistory[]          @relation("UserWatchHistory")
 
   @@index([username])
   @@index([email])
   @@index([isDeleted])
+  @@index([role])
+  @@index([moderationStatus])
 }
 
 model Tag {
@@ -100,17 +111,17 @@ model Video {
   isDeleted               Boolean                  @default(false)
   isHlsReady              Boolean                  @default(false)
   masterPlaylistUrl       String?
-  playbackUrl             String?
   processingLockedAt      DateTime?
   processingStatus        ProcessingStatus         @default(PENDING)
   processingWorkerId      String?
-  processingProgress      Float?                   @default(0)
-  processingStep          String?
-  processingStartedAt     DateTime?
-  processingCompletedAt   DateTime?
-  processingError         String?
   storageProvider         String?
   storageRegion           String?
+  processingCompletedAt   DateTime?
+  processingError         String?
+  processingProgress      Float?                   @default(0)
+  processingStartedAt     DateTime?
+  processingStep          String?
+  playbackUrl             String?
   availableQualities      String[]                 @default(["MAX", "1080p", "720p", "480p"])
   aichatSessions          AIChatSession[]
   comments                Comment[]
@@ -120,7 +131,7 @@ model Video {
   notifications           Notification[]
   playlistVideos          PlaylistVideo[]
   uploadSessions          UploadSession[]
-  owner                   User                     @relation("VideoOwner", fields: [ownerId], references: [id],onDelete: Restrict)
+  owner                   User                     @relation("VideoOwner", fields: [ownerId], references: [id])
   videoAnalyticsSnapshots VideoAnalyticsSnapshot[]
   categories              VideoCategory[]
   videoProcessingJobs     VideoProcessingJob[]
@@ -195,10 +206,10 @@ model UploadSession {
   updatedAt      DateTime     @updatedAt
   totalSize      BigInt?
   uploadedSize   BigInt?
-  uploadType     String? // VIDEO, IMAGE, AVATAR, POST
   cancelledAt    DateTime?
+  uploadType     String?
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  video          Video?       @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  video          Video?       @relation(fields: [videoId], references: [id])
 
   @@index([userId])
   @@index([status])
@@ -473,7 +484,7 @@ model Notification {
   videoId   String?
   sender    User?            @relation("NotificationSender", fields: [senderId], references: [id])
   user      User             @relation("UserNotifications", fields: [userId], references: [id])
-  video     Video?           @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  video     Video?           @relation(fields: [videoId], references: [id])
 
   @@index([userId])
   @@index([userId, isRead])
@@ -502,29 +513,29 @@ model FeedScore {
 }
 
 model VideoTranscript {
-  id         String   @id @default(uuid())
-  videoId    String   @unique
-  transcript String
-  segments   Json?
-  language   String?
-  source     String?  @default("MANUAL")
-  wordCount  Int?
+  id          String    @id @default(uuid())
+  videoId     String    @unique
+  transcript  String
+  language    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   generatedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  segments    Json?
+  source      String?   @default("MANUAL")
+  wordCount   Int?
+  video       Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
 }
 
 model AIChatSession {
   id        String          @id @default(uuid())
   userId    String?
   videoId   String?
-  title     String?
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+  title     String?
   messages  AIChatMessage[]
-  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
-  video     Video?          @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  user      User?           @relation(fields: [userId], references: [id])
+  video     Video?          @relation(fields: [videoId], references: [id])
 
   @@index([userId])
   @@index([videoId])
@@ -553,7 +564,7 @@ model UserEvent {
   entityId   String?
   metadata   Json?
   createdAt  DateTime        @default(now())
-  user       User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user       User?           @relation(fields: [userId], references: [id])
 
   @@index([userId])
   @@index([eventType])
@@ -591,20 +602,50 @@ model UserSettings {
 }
 
 model Report {
-  id          String           @id @default(uuid())
-  reporterId  String
-  targetType  ReportTargetType
-  targetId    String
-  reason      String
-  description String?
-  status      ReportStatus     @default(PENDING)
-  createdAt   DateTime         @default(now())
-  resolvedAt  DateTime?
-  reporter    User             @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  id             String           @id @default(uuid())
+  reporterId     String
+  targetType     ReportTargetType
+  targetId       String
+  reason         String
+  description    String?
+  status         ReportStatus     @default(PENDING)
+  createdAt      DateTime         @default(now())
+  resolvedAt     DateTime?
+  resolvedById   String?
+  resolutionNote String?
+  actionType     String?
+  actionMeta     Json?
+  updatedAt      DateTime         @updatedAt
+  reporter       User             @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+  resolvedBy     User?            @relation("ReportResolvedBy", fields: [resolvedById], references: [id])
 
   @@index([reporterId])
+  @@index([resolvedById])
   @@index([targetType, targetId])
   @@index([status])
+  @@index([status, updatedAt])
+  @@index([createdAt])
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  actorRole  UserRole
+  action     String
+  targetType String
+  targetId   String?
+  reason     String?
+  before     Json?
+  after      Json?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  actor      User     @relation("AdminAuditActor", fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([action])
+  @@index([targetType, targetId])
   @@index([createdAt])
 }
 
@@ -716,4 +757,17 @@ enum ReportStatus {
   REVIEWED
   REJECTED
   ACTION_TAKEN
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum AccountModerationStatus {
+  ACTIVE
+  RESTRICTED
+  SUSPENDED
 }

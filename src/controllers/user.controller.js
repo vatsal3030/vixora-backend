@@ -606,20 +606,27 @@ export const loginUser = asyncHandler(async (req, res) => {
         throw new ApiError(400, "username or email is required")
     }
 
-    const normalizedEmail = email?.toLowerCase().trim();
-    const normalizedUsername = username?.trim();
+    if (typeof password !== "string" || !password.trim()) {
+        throw new ApiError(400, "password is required")
+    }
+
+    const normalizedEmail =
+        typeof email === "string" ? email.toLowerCase().trim() : "";
+    const normalizedUsername =
+        typeof username === "string" ? username.toLowerCase().trim() : "";
+
+    const loginIdentifiers = [];
+    if (normalizedEmail) loginIdentifiers.push({ email: normalizedEmail });
+    if (normalizedUsername) loginIdentifiers.push({ username: normalizedUsername });
 
     const user = await prisma.user.findFirst({
         where: {
-            OR: [
-                { email: normalizedEmail },
-                { username: normalizedUsername }
-            ]
+            OR: loginIdentifiers
         }
     });
 
     if (!user) {
-        throw new ApiError(404, "User not found")
+        throw new ApiError(401, "Invalid credentials")
     }
 
     if (user.isDeleted) {
@@ -632,10 +639,7 @@ export const loginUser = asyncHandler(async (req, res) => {
     }
 
     if (user.authProvider !== "LOCAL") {
-        throw new ApiError(
-            400,
-            "This account uses Google sign-in. Please continue with Google."
-        );
+        throw new ApiError(401, "Invalid credentials");
     }
 
     const isPasswordValid = await comparePassword(password, user.password)
@@ -849,20 +853,26 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
         where: { email: normalizedEmail },
     });
 
-    // ✅ DO NOT reveal existence
-    if (!user || user.isDeleted) {
-        return res.json(
-            new ApiResponse(200, {}, "If account exists, OTP will be sent")
+    const genericSuccessResponse = () =>
+        res.status(200).json(
+            new ApiResponse(
+                200,
+                {},
+                "If an account with that email exists, an OTP has been sent."
+            )
         );
+
+    // Do not reveal user existence/deleted/verification state.
+    if (!user || user.isDeleted || !user.emailVerified) {
+        return genericSuccessResponse();
     }
 
-    // Prevent overwriting email verification OTP for unverified users.
-    if (!user.emailVerified) {
-        throw new ApiError(403, "Email not verified. Verify OTP first.");
+    try {
+        // Do not overwrite active OTP; otherwise users often submit previous email code.
+        throwIfActiveOtpExists(user);
+    } catch {
+        return genericSuccessResponse();
     }
-
-    // Do not overwrite active OTP; otherwise users often submit previous email code.
-    throwIfActiveOtpExists(user);
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = await hashPassword(otp);
@@ -882,21 +892,30 @@ export const forgotPasswordRequest = asyncHandler(async (req, res) => {
         otp,
     });
 
-    await sendEmail({
-        to: user.email,
-        subject: mail.subject,
-        html: mail.html,
-        text: `Your reset OTP is ${otp}`,
-    });
+    try {
+        await sendEmail({
+            to: user.email,
+            subject: mail.subject,
+            html: mail.html,
+            text: `Your reset OTP is ${otp}`,
+        });
+    } catch {
+        // Keep response generic to avoid mail/provider leakage.
+        // Also clear stored OTP so user is not locked out until expiry when mail provider fails.
+        await prisma.user
+            .update({
+                where: { id: user.id },
+                data: {
+                    otpHash: null,
+                    otpExpiresAt: null,
+                    otpAttempts: 0,
+                    otpLastSentAt: null,
+                },
+            })
+            .catch(() => null);
+    }
 
-
-    return res.status(200).json(
-        new ApiResponse(
-            200,
-            {},
-            "If an account with that email exists, an OTP has been sent."
-        )
-    );
+    return genericSuccessResponse();
 })
 
 export const forgotPasswordVerify = asyncHandler(async (req, res) => {
@@ -1928,6 +1947,3 @@ export const restoreAccountConfirm = asyncHandler(async (req, res) => {
             )
         );
 })
-
-
-

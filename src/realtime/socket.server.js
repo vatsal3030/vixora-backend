@@ -25,15 +25,25 @@ const parseCookies = (cookieHeader = "") => {
   return result;
 };
 
+const parseBearerToken = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^Bearer\s+(.+)$/i);
+  if (!match) return "";
+  return String(match[1] || "").trim();
+};
+
 const readSocketToken = (socket) => {
   const authToken = socket.handshake?.auth?.token;
   if (typeof authToken === "string" && authToken.trim()) {
-    return authToken.trim().replace(/^Bearer\s+/i, "");
+    const bearerToken = parseBearerToken(authToken);
+    return bearerToken || authToken.trim();
   }
 
   const headerAuth = socket.handshake?.headers?.authorization;
   if (typeof headerAuth === "string" && headerAuth.trim()) {
-    return headerAuth.trim().replace(/^Bearer\s+/i, "");
+    const bearerToken = parseBearerToken(headerAuth);
+    return bearerToken || headerAuth.trim();
   }
 
   const cookieMap = parseCookies(socket.handshake?.headers?.cookie);
@@ -138,4 +148,3 @@ export const emitToUsers = (userIds, event, payload) => {
 
   return uniqueIds.length;
 };
-
