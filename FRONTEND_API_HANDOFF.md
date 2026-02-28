@@ -1082,6 +1082,11 @@ Watch history notes:
 - For account switch, frontend must persist `accountSwitchToken` per account (secure storage policy on frontend side).
 - AI APIs require authenticated user and respect daily quota limits.
 - AI responses can come from `gemini`, `rule-based`, or `session-cache` providers depending on request type and cache hit.
+- Cache strategy is free-tier-safe by default:
+  - L1 in-memory cache is primary.
+  - Redis cache layer is disabled by default in production unless `CACHE_REDIS_ENABLED=true`.
+  - Very short TTL cache keys can stay L1-only (`CACHE_REDIS_MIN_TTL_SECONDS`, default `60` in production).
+  - Redis cache can be restricted by scope allowlist (`CACHE_REDIS_SCOPE_ALLOWLIST`).
 - Folder checks are strict in backend verification:
   - video finalize expects `videos/<userId>` and `thumbnails/<userId>`
   - avatar update expects `avatars/<userId>`

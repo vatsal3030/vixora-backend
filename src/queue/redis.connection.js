@@ -30,6 +30,10 @@ const redisPassword = cleanEnv(process.env.REDIS_PASSWORD) || undefined;
 const hasRedisConfig = Boolean(redisUrl || redisHost);
 const isRedisEnabled = parseBool(process.env.REDIS_ENABLED, false);
 const isCacheEnabled = parseBool(process.env.CACHE_ENABLED, false);
+const isRedisCacheEnabled = parseBool(
+  process.env.CACHE_REDIS_ENABLED,
+  cleanEnv(process.env.NODE_ENV) !== "production"
+);
 const shouldRunWorker = parseBool(
   process.env.RUN_WORKER,
   cleanEnv(process.env.NODE_ENV) !== "production"
@@ -43,7 +47,8 @@ const isQueueEnabled = parseBool(
   shouldRunWorker || shouldRunWorkerOnDemand
 );
 const shouldUseRedisQueue = isQueueEnabled;
-const shouldUseRedis = shouldUseRedisQueue || isCacheEnabled;
+const shouldUseRedisCache = isCacheEnabled && isRedisCacheEnabled;
+const shouldUseRedis = shouldUseRedisQueue || shouldUseRedisCache;
 const REDIS_ERROR_LOG_COOLDOWN_MS = Number(process.env.REDIS_ERROR_LOG_COOLDOWN_MS || 30000);
 
 export const isTransientRedisError = (err) => {
@@ -61,9 +66,15 @@ export const isTransientRedisError = (err) => {
   );
 };
 
+export const isRedisQuotaExceededError = (err) => {
+  const message = String(err?.message || "").toLowerCase();
+  return message.includes("max requests limit exceeded");
+};
+
 const baseOptions = {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
+  lazyConnect: true,
   retryStrategy(times) {
     // Hard-cap reconnect attempts to avoid infinite retry loops on bad prod config.
     if (times > 10) {
@@ -75,6 +86,7 @@ const baseOptions = {
 
 let redisConnection = null;
 let initialized = false;
+let hardDisabled = false;
 const attachedConnections = new WeakSet();
 
 const attachRedisListeners = (connection) => {
@@ -103,6 +115,17 @@ const attachRedisListeners = (connection) => {
       } else {
         console.error("Redis error:", message);
       }
+
+      if (isRedisQuotaExceededError(err)) {
+        hardDisabled = true;
+        console.error("Redis disabled for this process due to Upstash max requests limit.");
+        redisConnection = null;
+        try {
+          connection.disconnect();
+        } catch {
+          // ignore
+        }
+      }
     }
   });
 
@@ -117,6 +140,10 @@ const attachRedisListeners = (connection) => {
 };
 
 export const getRedisConnection = () => {
+  if (hardDisabled) {
+    return null;
+  }
+
   if (initialized) {
     return redisConnection;
   }
@@ -132,7 +159,7 @@ export const getRedisConnection = () => {
   }
 
   if (!shouldUseRedis) {
-    console.warn("Redis connection skipped because queue + cache modes are disabled.");
+    console.warn("Redis connection skipped because queue + redis-cache modes are disabled.");
     return null;
   }
 
@@ -176,4 +203,4 @@ export const closeRedisConnection = async () => {
   console.log("Redis connection closed.");
 };
 
-export { isRedisEnabled, isCacheEnabled, isQueueEnabled };
+export { isRedisEnabled, isCacheEnabled, isRedisCacheEnabled, isQueueEnabled };

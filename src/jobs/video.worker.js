@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import {
   closeRedisConnection,
   getRedisConnection,
+  isRedisQuotaExceededError,
   isTransientRedisError,
 } from "../queue/redis.connection.js";
 import { closeVideoQueue } from "../queue/video.queue.js";
@@ -18,6 +19,12 @@ const parseBool = (value, defaultValue = false) => {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
 
+const parsePositiveInt = (value, fallbackValue) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallbackValue;
+  return parsed;
+};
+
 const shouldRunWorkerDefault = process.env.NODE_ENV !== "production";
 const shouldRunWorker = parseBool(process.env.RUN_WORKER, shouldRunWorkerDefault);
 const shouldRunWorkerOnDemand = parseBool(
@@ -31,15 +38,34 @@ const skipVersionCheck = parseBool(
   process.env.BULLMQ_SKIP_VERSION_CHECK,
   process.env.NODE_ENV === "production"
 );
+const workerErrorLogCooldownMs = Number(process.env.WORKER_ERROR_LOG_COOLDOWN_MS || 30000);
+const workerConcurrency = parsePositiveInt(
+  process.env.WORKER_CONCURRENCY,
+  process.env.NODE_ENV === "production" ? 1 : 2
+);
 
 let workerInstance = null;
 let idleShutdownTimer = null;
+let lastWorkerErrorLogAt = 0;
+let quotaShutdownInProgress = false;
 
 const clearIdleShutdownTimer = () => {
   if (idleShutdownTimer) {
     clearTimeout(idleShutdownTimer);
     idleShutdownTimer = null;
   }
+};
+
+const shouldLogWorkerError = () => {
+  const now = Date.now();
+  if (!Number.isFinite(workerErrorLogCooldownMs) || workerErrorLogCooldownMs <= 0) {
+    return true;
+  }
+  if (now - lastWorkerErrorLogAt < workerErrorLogCooldownMs) {
+    return false;
+  }
+  lastWorkerErrorLogAt = now;
+  return true;
 };
 
 const checkIfCancelled = async (videoId) => {
@@ -228,19 +254,42 @@ export const startVideoWorker = async ({ force = false } = {}) => {
     processJob,
     {
       connection: redisConnection,
-      concurrency: 2,
+      concurrency: workerConcurrency,
       skipVersionCheck,
     }
   );
 
   workerInstance.on("error", (err) => {
     const message = err?.message || String(err);
-    if (isTransientRedisError(err)) {
-      console.warn("Video worker transient runtime error:", message);
+
+    if (isRedisQuotaExceededError(err)) {
+      if (!quotaShutdownInProgress) {
+        quotaShutdownInProgress = true;
+        console.error(
+          "Video worker disabled due to Upstash command limit. Set RUN_WORKER=false or upgrade/reset Redis quota."
+        );
+        stopVideoWorker().catch((shutdownError) => {
+          if (shouldLogWorkerError()) {
+            console.error(
+              "Failed to stop worker after Redis quota error:",
+              shutdownError?.message || shutdownError
+            );
+          }
+        });
+      }
       return;
     }
 
-    console.error("Video worker runtime error:", message);
+    if (isTransientRedisError(err)) {
+      if (shouldLogWorkerError()) {
+        console.warn("Video worker transient runtime error:", message);
+      }
+      return;
+    }
+
+    if (shouldLogWorkerError()) {
+      console.error("Video worker runtime error:", message);
+    }
   });
 
   workerInstance.on("active", () => {
@@ -257,6 +306,10 @@ export const startVideoWorker = async ({ force = false } = {}) => {
   });
 
   console.log("Cloudinary background worker started.");
+
+  if (shouldRunWorkerOnDemand) {
+    scheduleIdleShutdown();
+  }
 
   return workerInstance;
 };
@@ -275,8 +328,9 @@ export const stopVideoWorker = async () => {
 
   await closeVideoQueue();
   await closeRedisConnection();
+  quotaShutdownInProgress = false;
 
-  console.log("Cloudinary background worker stopped after idle timeout.");
+  console.log("Cloudinary background worker stopped.");
 };
 
 if (shouldRunWorker) {

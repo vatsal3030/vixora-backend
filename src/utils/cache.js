@@ -1,10 +1,20 @@
 import crypto from "crypto";
-import { getRedisConnection, isCacheEnabled } from "../queue/redis.connection.js";
+import {
+  getRedisConnection,
+  isCacheEnabled,
+  isRedisCacheEnabled,
+} from "../queue/redis.connection.js";
 
 const parseBool = (value, defaultValue = false) => {
   if (value === undefined || value === null || value === "") return defaultValue;
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
+
+const normalizeList = (value) =>
+  String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 
 const parsePositiveInt = (value, defaultValue) => {
   const parsed = Number(value);
@@ -19,6 +29,16 @@ const CACHE_DEFAULT_TTL_SECONDS = parsePositiveInt(
 );
 const CACHE_L1_ENABLED = parseBool(process.env.CACHE_L1_ENABLED, true);
 const CACHE_L1_MAX_ENTRIES = parsePositiveInt(process.env.CACHE_L1_MAX_ENTRIES, 300);
+const CACHE_REDIS_MIN_TTL_SECONDS = parsePositiveInt(
+  process.env.CACHE_REDIS_MIN_TTL_SECONDS,
+  String(process.env.NODE_ENV || "").trim() === "production" ? 60 : 15
+);
+const CACHE_REDIS_SCOPE_ALLOWLIST = normalizeList(
+  process.env.CACHE_REDIS_SCOPE_ALLOWLIST ||
+    (String(process.env.NODE_ENV || "").trim() === "production"
+      ? "video:detail,channel:info,channel:about"
+      : "")
+);
 
 const l1Cache = new Map();
 
@@ -82,6 +102,13 @@ const buildStoredValue = (value, ttlSeconds) => ({
   e: nowMs() + ttlSeconds * 1000,
 });
 
+const isRedisScopeAllowed = (scope) => {
+  if (CACHE_REDIS_SCOPE_ALLOWLIST.length === 0) return true;
+  return CACHE_REDIS_SCOPE_ALLOWLIST.some((allowedScope) =>
+    scope === allowedScope || scope.startsWith(`${allowedScope}:`)
+  );
+};
+
 export const getCachedValue = async ({ scope, params = {} }) => {
   const key = buildCacheKey(scope, params);
 
@@ -92,6 +119,14 @@ export const getCachedValue = async ({ scope, params = {} }) => {
   const l1Value = readL1(key);
   if (l1Value !== null) {
     return { hit: true, value: l1Value, source: "l1", key };
+  }
+
+  if (!isRedisCacheEnabled) {
+    return { hit: false, value: null, source: "l1-only", key };
+  }
+
+  if (!isRedisScopeAllowed(scope)) {
+    return { hit: false, value: null, source: "l1-only-scope", key };
   }
 
   const redis = getRedisConnection();
@@ -107,7 +142,7 @@ export const getCachedValue = async ({ scope, params = {} }) => {
 
     const parsed = JSON.parse(raw);
     if (!parsed || parsed.e <= nowMs()) {
-      redis.del(key).catch(() => null);
+      // Skip delete to avoid write amplification under high cardinality keys.
       return { hit: false, value: null, source: "expired", key };
     }
 
@@ -134,6 +169,19 @@ export const setCachedValue = async ({
   const ttl = parsePositiveInt(ttlSeconds, CACHE_DEFAULT_TTL_SECONDS);
 
   writeL1(key, value, ttl);
+
+  if (!isRedisCacheEnabled) {
+    return;
+  }
+
+  if (!isRedisScopeAllowed(scope)) {
+    return;
+  }
+
+  if (ttl < CACHE_REDIS_MIN_TTL_SECONDS) {
+    // Free-tier strategy: very short TTL keys remain in L1 only.
+    return;
+  }
 
   const redis = getRedisConnection();
   if (!redis) {

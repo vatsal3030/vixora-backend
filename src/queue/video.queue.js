@@ -6,6 +6,12 @@ const parseBool = (value, defaultValue = false) => {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 };
 
+const parsePositiveInt = (value, fallbackValue) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallbackValue;
+  return parsed;
+};
+
 const shouldRunWorker = parseBool(
   process.env.RUN_WORKER,
   process.env.NODE_ENV !== "production"
@@ -23,6 +29,14 @@ const shouldUseQueue = queueEnabled;
 const skipVersionCheck = parseBool(
   process.env.BULLMQ_SKIP_VERSION_CHECK,
   process.env.NODE_ENV === "production"
+);
+const queueJobAttempts = parsePositiveInt(
+  process.env.QUEUE_JOB_ATTEMPTS,
+  process.env.NODE_ENV === "production" ? 2 : 5
+);
+const queueBackoffDelayMs = parsePositiveInt(
+  process.env.QUEUE_JOB_BACKOFF_MS,
+  process.env.NODE_ENV === "production" ? 3000 : 5000
 );
 
 let videoQueue = null;
@@ -43,10 +57,10 @@ export const getVideoQueue = () => {
       connection: redisConnection,
       skipVersionCheck,
       defaultJobOptions: {
-        attempts: 5,
+        attempts: queueJobAttempts,
         backoff: {
           type: "exponential",
-          delay: 5000,
+          delay: queueBackoffDelayMs,
         },
         removeOnComplete: 100,
         removeOnFail: 500,
