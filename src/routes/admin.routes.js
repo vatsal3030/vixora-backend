@@ -48,6 +48,7 @@ import {
   getAdminAuditLogById,
   getAdminAuditLogs,
 } from "../controllers/admin/admin.audit.controller.js";
+import { seedAdminFeedTopics } from "../controllers/admin/admin.feed.controller.js";
 
 const router = Router();
 
@@ -57,6 +58,7 @@ router.get("/me", getAdminMe);
 
 router.get("/dashboard/overview", getAdminDashboardOverview);
 router.get("/dashboard/activity", getAdminDashboardActivity);
+router.post("/feed/topics/seed", getAdminOrAbove(), seedAdminFeedTopics);
 
 router.get("/reports", getAdminReports);
 router.get("/reports/:reportId", getAdminReportById);

@@ -3,6 +3,10 @@
 Last updated: 2026-02-28
 Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`
 
+Primary in-depth contract (use this first for frontend implementation and AI agents):
+
+- `FRONTEND_API_CONTRACT_FULL.md`
+
 For implementation-depth frontend guidance (route selection, per-screen call sequence, admin UI blueprint, role assignment flow), read:
 
 - `FRONTEND_INTEGRATION_PLAYBOOK.md`

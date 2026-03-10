@@ -22,13 +22,29 @@ const BASE_AVAILABLE_VIDEO_WHERE = Object.freeze({
 const MAX_PERSONALIZATION_HISTORY_ROWS = 300;
 const MAX_INTERESTED_TAG_IDS = 100;
 const MAX_SUPPRESSION_ROWS = 1000;
+const MAX_TAG_DISCOVERY_VIDEOS = 500;
+const MAX_TAG_SIGNAL_ROWS = 300;
+const TAGS_DEFAULT_LIMIT = 20;
+const TAGS_MAX_LIMIT = 50;
+const TAG_FEED_DEFAULT_LIMIT = 12;
+const TAG_FEED_MAX_LIMIT = 50;
+const MAX_TAG_NAME_LENGTH = 30;
+const MAX_SEED_TOPICS = 25;
+const FALLBACK_FEED_TAG_TOPICS = Object.freeze([
+    "music",
+    "gaming",
+    "tech",
+    "live",
+    "news",
+    "movies",
+]);
 
 const buildBaseFeedVideoWhere = (extra = {}) => ({
     ...BASE_AVAILABLE_VIDEO_WHERE,
     ...extra
 });
 
-const HOME_FEED_SELECT = {
+const FEED_VIDEO_SELECT = {
     id: true,
     title: true,
     thumbnail: true,
@@ -36,6 +52,30 @@ const HOME_FEED_SELECT = {
     views: true,
     isShort: true,
     createdAt: true,
+    popularityScore: true,
+    engagementScore: true,
+    tags: {
+        select: {
+            tag: {
+                select: {
+                    id: true,
+                    name: true,
+                },
+            },
+        },
+    },
+    categories: {
+        select: {
+            category: {
+                select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                    icon: true,
+                },
+            },
+        },
+    },
     owner: {
         select: {
             id: true,
@@ -48,6 +88,8 @@ const HOME_FEED_SELECT = {
 const HOME_CACHE_TTL_SECONDS = 20;
 const SUBSCRIPTIONS_CACHE_TTL_SECONDS = 20;
 const TRENDING_CACHE_TTL_SECONDS = 45;
+const TAGS_CACHE_TTL_SECONDS = 30;
+const TAG_FEED_CACHE_TTL_SECONDS = 20;
 const MAX_CACHEABLE_PAGE = 3;
 const MAX_CACHEABLE_LIMIT = 20;
 
@@ -68,6 +110,92 @@ const parseBooleanQuery = (value) => {
 
     return undefined;
 };
+
+const parseFeedTopicInput = (value) => {
+    if (value === undefined || value === null || value === "") return [];
+
+    const rawEntries = Array.isArray(value)
+        ? value
+        : String(value).split(",");
+
+    const topics = [];
+    const seen = new Set();
+
+    for (const entry of rawEntries) {
+        const normalized = normalizeTagName(entry);
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        topics.push(normalized);
+        if (topics.length >= MAX_SEED_TOPICS) break;
+    }
+
+    return topics;
+};
+
+const getDefaultFeedTopicNames = () => {
+    const fromEnv = parseFeedTopicInput(process.env.DEFAULT_FEED_TOPICS);
+    if (fromEnv.length > 0) return fromEnv;
+    return [...FALLBACK_FEED_TAG_TOPICS];
+};
+
+const normalizeTagName = (value) =>
+    String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .slice(0, MAX_TAG_NAME_LENGTH);
+
+const toDisplayTagName = (value) =>
+    String(value || "")
+        .split(/[\s_-]+/)
+        .map((chunk) =>
+            chunk ? chunk.charAt(0).toUpperCase() + chunk.slice(1) : chunk
+        )
+        .join(" ")
+        .trim();
+
+const computeFreshnessComponent = (createdAt, decayDays = 30) => {
+    const timestamp = new Date(createdAt).getTime();
+    if (!Number.isFinite(timestamp)) return 0;
+    const ageDays = Math.max(0, (Date.now() - timestamp) / 86400000);
+    const freshness = Math.max(0, 1 - ageDays / decayDays);
+    return freshness * 25;
+};
+
+const computeVideoTrendScore = (video) => {
+    const popularity = Number(video?.popularityScore || 0);
+    const engagement = Number(video?.engagementScore || 0);
+    const views = Number(video?.views || 0);
+
+    return (
+        popularity * 0.55 +
+        engagement * 0.2 +
+        Math.log10(views + 1) * 4 +
+        computeFreshnessComponent(video?.createdAt)
+    );
+};
+
+const flattenVideoTopics = (video) => {
+    const tags = Array.isArray(video?.tags)
+        ? video.tags
+            .map((row) => row?.tag?.name)
+            .filter(Boolean)
+        : [];
+
+    const categories = Array.isArray(video?.categories)
+        ? video.categories
+            .map((row) => row?.category)
+            .filter((row) => row?.id)
+        : [];
+
+    return {
+        ...video,
+        tags,
+        categories,
+    };
+};
+
+const flattenVideoTopicsList = (videos = []) =>
+    (Array.isArray(videos) ? videos : []).map((row) => flattenVideoTopics(row));
 
 const normalizeNotClauses = (existingNot) => {
     if (!existingNot) return [];
@@ -161,6 +289,169 @@ const getSuppressionFilterForUser = async (userId) => {
     };
 };
 
+const isPersonalizationEnabledForUser = async (userId) => {
+    if (!userId) return false;
+
+    const settings = await prisma.userSettings.findUnique({
+        where: { userId },
+        select: { personalizeRecommendations: true },
+    });
+
+    return settings?.personalizeRecommendations !== false;
+};
+
+const buildVideoTagIdMap = async (videoIds = []) => {
+    const ids = [...new Set((videoIds || []).filter(Boolean))];
+    if (ids.length === 0) return new Map();
+
+    const rows = await prisma.videoTag.findMany({
+        where: {
+            videoId: {
+                in: ids,
+            },
+        },
+        select: {
+            videoId: true,
+            tagId: true,
+        },
+    });
+
+    const map = new Map();
+    for (const row of rows) {
+        if (!map.has(row.videoId)) map.set(row.videoId, []);
+        map.get(row.videoId).push(row.tagId);
+    }
+
+    return map;
+};
+
+const buildUserTagInterestMap = async ({ userId, suppression }) => {
+    if (!userId) return new Map();
+
+    const videoFilter = buildBaseFeedVideoWhere(suppression?.whereExtra || {});
+
+    const [watchRows, likeRows, hiddenRows] = await Promise.all([
+        prisma.watchHistory.findMany({
+            where: {
+                userId,
+                video: {
+                    is: videoFilter,
+                },
+            },
+            orderBy: {
+                lastWatchedAt: "desc",
+            },
+            take: MAX_TAG_SIGNAL_ROWS,
+            select: {
+                videoId: true,
+                progress: true,
+                completed: true,
+                lastWatchedAt: true,
+            },
+        }),
+        prisma.like.findMany({
+            where: {
+                likedById: userId,
+                videoId: {
+                    not: null,
+                },
+                video: {
+                    is: videoFilter,
+                },
+            },
+            orderBy: {
+                createdAt: "desc",
+            },
+            take: MAX_TAG_SIGNAL_ROWS,
+            select: {
+                videoId: true,
+                createdAt: true,
+            },
+        }),
+        prisma.notInterested.findMany({
+            where: {
+                userId,
+            },
+            orderBy: {
+                createdAt: "desc",
+            },
+            take: MAX_TAG_SIGNAL_ROWS,
+            select: {
+                videoId: true,
+                createdAt: true,
+            },
+        }),
+    ]);
+
+    const videoTagMap = await buildVideoTagIdMap([
+        ...watchRows.map((row) => row.videoId),
+        ...likeRows.map((row) => row.videoId).filter(Boolean),
+        ...hiddenRows.map((row) => row.videoId).filter(Boolean),
+    ]);
+
+    const bump = (map, tagId, delta) => {
+        if (!tagId || !Number.isFinite(delta) || delta === 0) return;
+        map.set(tagId, (map.get(tagId) || 0) + delta);
+    };
+
+    const interestMap = new Map();
+
+    for (const row of watchRows) {
+        const tagIds = videoTagMap.get(row.videoId) || [];
+        if (tagIds.length === 0) continue;
+
+        const ageDays = Math.max(
+            0,
+            (Date.now() - new Date(row.lastWatchedAt).getTime()) / 86400000
+        );
+        const recencyFactor = Math.max(0.25, 1 - ageDays / 21);
+        const watchWeight =
+            (0.6 + Number(row.progress || 0) / 100 + (row.completed ? 0.4 : 0)) *
+            recencyFactor;
+        const perTag = watchWeight / tagIds.length;
+
+        for (const tagId of tagIds) {
+            bump(interestMap, tagId, perTag);
+        }
+    }
+
+    for (const row of likeRows) {
+        if (!row.videoId) continue;
+        const tagIds = videoTagMap.get(row.videoId) || [];
+        if (tagIds.length === 0) continue;
+
+        const ageDays = Math.max(
+            0,
+            (Date.now() - new Date(row.createdAt).getTime()) / 86400000
+        );
+        const recencyFactor = Math.max(0.3, 1 - ageDays / 30);
+        const perTag = (1.4 * recencyFactor) / tagIds.length;
+
+        for (const tagId of tagIds) {
+            bump(interestMap, tagId, perTag);
+        }
+    }
+
+    for (const row of hiddenRows) {
+        if (!row.videoId) continue;
+        const tagIds = videoTagMap.get(row.videoId) || [];
+        if (tagIds.length === 0) continue;
+
+        const ageDays = Math.max(
+            0,
+            (Date.now() - new Date(row.createdAt).getTime()) / 86400000
+        );
+        const recencyFactor = Math.max(0.3, 1 - ageDays / 30);
+        const perTag = (-2.2 * recencyFactor) / tagIds.length;
+
+        for (const tagId of tagIds) {
+            bump(interestMap, tagId, perTag);
+        }
+    }
+
+    return interestMap;
+};
+
 
 /**
  * Helper: attach watch progress
@@ -208,6 +499,402 @@ export const attachWatchProgress = async (videos, userId) => {
 
 };
 
+export const getFeedTags = asyncHandler(async (req, res) => {
+    const userId = req.user?.id || null;
+    const { page = "1", limit = String(TAGS_DEFAULT_LIMIT), q = "" } = req.query;
+    const searchQuery = normalizeTagName(q);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        TAGS_MAX_LIMIT
+    );
+
+    const suppression = await getSuppressionFilterForUser(userId);
+    const personalizationEnabled = await isPersonalizationEnabledForUser(userId);
+
+    const shouldUseCache = isCacheableWindow(safePage, safeLimit);
+    const cacheParams = shouldUseCache
+        ? {
+            viewerId: userId || "anonymous",
+            page: safePage,
+            limit: safeLimit,
+            q: searchQuery || "all",
+            blockedChannels: suppression.blockedChannelIds.length,
+            hiddenVideos: suppression.notInterestedVideoIds.length,
+            personalized: personalizationEnabled ? "on" : "off",
+        }
+        : null;
+
+    if (cacheParams) {
+        const cached = await getCachedValue({
+            scope: "feed:tags",
+            params: cacheParams,
+        });
+
+        if (cached.hit && cached.value) {
+            return res.status(200).json(
+                new ApiResponse(200, cached.value.data, cached.value.message)
+            );
+        }
+    }
+
+    const candidateVideos = await prisma.video.findMany({
+        where: buildBaseFeedVideoWhere(suppression.whereExtra),
+        orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
+        take: MAX_TAG_DISCOVERY_VIDEOS,
+        select: {
+            id: true,
+            views: true,
+            popularityScore: true,
+            engagementScore: true,
+            createdAt: true,
+            tags: {
+                select: {
+                    tag: {
+                        select: {
+                            id: true,
+                            name: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
+
+    const interestMap = personalizationEnabled
+        ? await buildUserTagInterestMap({ userId, suppression })
+        : new Map();
+
+    const rankingMap = new Map();
+    for (const video of candidateVideos) {
+        const tags = (video.tags || [])
+            .map((row) => row?.tag)
+            .filter((tag) => tag?.id && tag?.name);
+
+        if (tags.length === 0) continue;
+
+        const baseScore = computeVideoTrendScore(video);
+        const perTagScore = baseScore / tags.length;
+
+        for (const tag of tags) {
+            if (!rankingMap.has(tag.id)) {
+                rankingMap.set(tag.id, {
+                    id: tag.id,
+                    name: tag.name,
+                    displayName: toDisplayTagName(tag.name),
+                    slug: tag.name,
+                    videoCount: 0,
+                    trendingScore: 0,
+                    interestScore: 0,
+                    lastVideoAt: null,
+                });
+            }
+
+            const entry = rankingMap.get(tag.id);
+            entry.videoCount += 1;
+            entry.trendingScore += perTagScore;
+            entry.interestScore = Number(interestMap.get(tag.id) || 0);
+            if (
+                !entry.lastVideoAt ||
+                new Date(video.createdAt).getTime() > new Date(entry.lastVideoAt).getTime()
+            ) {
+                entry.lastVideoAt = video.createdAt;
+            }
+        }
+    }
+
+    let rankedTags = [...rankingMap.values()].map((tag) => {
+        const normalizedInterest = Math.max(-5, Math.min(5, tag.interestScore));
+        const finalScore = Number(
+            (tag.trendingScore + normalizedInterest * 10).toFixed(4)
+        );
+
+        return {
+            id: tag.id,
+            name: tag.name,
+            displayName: tag.displayName,
+            slug: tag.slug,
+            videoCount: tag.videoCount,
+            lastVideoAt: tag.lastVideoAt,
+            isPersonalized: normalizedInterest > 0.1,
+            scores: {
+                final: finalScore,
+                trending: Number(tag.trendingScore.toFixed(4)),
+                interest: Number(normalizedInterest.toFixed(4)),
+            },
+        };
+    });
+
+    if (rankedTags.length === 0) {
+        const defaultTopics = getDefaultFeedTopicNames();
+        const existingTags = defaultTopics.length > 0
+            ? await prisma.tag.findMany({
+                where: {
+                    name: {
+                        in: defaultTopics,
+                    },
+                },
+                select: {
+                    id: true,
+                    name: true,
+                },
+            })
+            : [];
+
+        const tagIdByName = new Map(existingTags.map((tag) => [tag.name, tag.id]));
+
+        rankedTags = defaultTopics.map((topic, index) => ({
+            id: tagIdByName.get(topic) || `seed:${topic}`,
+            name: topic,
+            displayName: toDisplayTagName(topic),
+            slug: topic,
+            videoCount: 0,
+            lastVideoAt: null,
+            isPersonalized: false,
+            scores: {
+                final: Number((1 - index * 0.01).toFixed(4)),
+                trending: 0,
+                interest: 0,
+            },
+        }));
+    }
+
+    if (searchQuery) {
+        rankedTags = rankedTags.filter((tag) =>
+            tag.name.toLowerCase().includes(searchQuery)
+        );
+    }
+
+    rankedTags.sort((a, b) => {
+        if (b.scores.final !== a.scores.final) return b.scores.final - a.scores.final;
+        if (b.videoCount !== a.videoCount) return b.videoCount - a.videoCount;
+        return a.name.localeCompare(b.name);
+    });
+
+    const pagedItems = rankedTags.slice(skip, skip + safeLimit);
+
+    const responseData = buildPaginatedListData({
+        key: "tags",
+        items: pagedItems,
+        currentPage: safePage,
+        limit: safeLimit,
+        totalItems: rankedTags.length,
+        extra: {
+            filters: {
+                q: searchQuery || null,
+                personalized: personalizationEnabled,
+                blockedChannels: suppression.blockedChannelIds.length,
+                hiddenVideos: suppression.notInterestedVideoIds.length,
+            },
+        },
+    });
+
+    const responseMessage = "Feed tags fetched successfully";
+
+    if (cacheParams) {
+        await setCachedValue({
+            scope: "feed:tags",
+            params: cacheParams,
+            value: { data: responseData, message: responseMessage },
+            ttlSeconds: TAGS_CACHE_TTL_SECONDS,
+        });
+    }
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, responseData, responseMessage));
+});
+
+export const getTagFeed = asyncHandler(async (req, res) => {
+    const userId = req.user?.id || null;
+    const tagName = normalizeTagName(req.params?.tagName || req.query?.tag || "");
+    const {
+        page = "1",
+        limit = String(TAG_FEED_DEFAULT_LIMIT),
+        sortBy = "score",
+        sortType = "desc",
+    } = req.query;
+
+    if (!tagName) {
+        throw new ApiError(400, "tagName is required");
+    }
+
+    const normalizedSortType = String(sortType || "").toLowerCase() === "asc" ? "asc" : "desc";
+    const safeSortBy = String(sortBy || "").toLowerCase() === "createdat" ? "createdAt" : "score";
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        TAG_FEED_MAX_LIMIT
+    );
+
+    const resolvedTag = await prisma.tag.findUnique({
+        where: { name: tagName },
+        select: { id: true, name: true },
+    });
+
+    if (!resolvedTag) {
+        if (!getDefaultFeedTopicNames().includes(tagName)) {
+            throw new ApiError(404, "Tag not found");
+        }
+
+        const responseData = buildPaginatedListData({
+            items: [],
+            currentPage: safePage,
+            limit: safeLimit,
+            totalItems: 0,
+            extra: {
+                tag: {
+                    id: null,
+                    name: tagName,
+                    displayName: toDisplayTagName(tagName),
+                    slug: tagName,
+                },
+                filters: {
+                    sortBy: safeSortBy,
+                    sortType: normalizedSortType,
+                    personalizationBoost: 0,
+                    blockedChannels: 0,
+                    hiddenVideos: 0,
+                },
+            },
+        });
+
+        return res
+            .status(200)
+            .json(new ApiResponse(200, responseData, "Tag feed fetched successfully"));
+    }
+
+    const suppression = await getSuppressionFilterForUser(userId);
+    const personalizationEnabled = await isPersonalizationEnabledForUser(userId);
+
+    const shouldUseCache = isCacheableWindow(safePage, safeLimit);
+    const cacheParams = shouldUseCache
+        ? {
+            viewerId: userId || "anonymous",
+            tagId: resolvedTag.id,
+            page: safePage,
+            limit: safeLimit,
+            sortBy: safeSortBy,
+            sortType: normalizedSortType,
+            blockedChannels: suppression.blockedChannelIds.length,
+            hiddenVideos: suppression.notInterestedVideoIds.length,
+            personalized: personalizationEnabled ? "on" : "off",
+        }
+        : null;
+
+    if (cacheParams) {
+        const cached = await getCachedValue({
+            scope: "feed:tag",
+            params: cacheParams,
+        });
+
+        if (cached.hit && cached.value) {
+            return res.status(200).json(
+                new ApiResponse(200, cached.value.data, cached.value.message)
+            );
+        }
+    }
+
+    const whereClause = buildBaseFeedVideoWhere({
+        ...suppression.whereExtra,
+        tags: {
+            some: {
+                tagId: resolvedTag.id,
+            },
+        },
+    });
+
+    const [videos, totalVideos] = await Promise.all([
+        prisma.video.findMany({
+            where: whereClause,
+            orderBy:
+                safeSortBy === "createdAt"
+                    ? [{ createdAt: normalizedSortType }]
+                    : [
+                        { popularityScore: normalizedSortType },
+                        { createdAt: normalizedSortType === "asc" ? "asc" : "desc" },
+                    ],
+            skip,
+            take: safeLimit,
+            select: FEED_VIDEO_SELECT,
+        }),
+        prisma.video.count({
+            where: whereClause,
+        }),
+    ]);
+
+    const enrichedVideos = flattenVideoTopicsList(
+        await attachWatchProgress(videos, userId)
+    );
+
+    let personalizationBoost = 0;
+    let rankedVideos = enrichedVideos;
+    if (personalizationEnabled && safeSortBy !== "createdAt" && userId) {
+        const interestMap = await buildUserTagInterestMap({ userId, suppression });
+        const normalizedInterest = Math.max(-5, Math.min(5, Number(interestMap.get(resolvedTag.id) || 0)));
+        personalizationBoost = Number(normalizedInterest.toFixed(4));
+
+        rankedVideos = [...enrichedVideos]
+            .map((video) => {
+                let score = computeVideoTrendScore(video) + normalizedInterest * 10;
+
+                if (video.watchProgress?.completed) {
+                    score -= 8;
+                } else if (Number(video.watchProgress?.progress || 0) > 0) {
+                    score -= Number(video.watchProgress.progress) / 25;
+                }
+
+                return { ...video, _tagFeedScore: score };
+            })
+            .sort((a, b) =>
+                normalizedSortType === "asc"
+                    ? a._tagFeedScore - b._tagFeedScore
+                    : b._tagFeedScore - a._tagFeedScore
+            )
+            .map((video) => {
+                const { _tagFeedScore, ...rest } = video;
+                return rest;
+            });
+    }
+
+    const responseData = buildPaginatedListData({
+        items: rankedVideos,
+        currentPage: safePage,
+        limit: safeLimit,
+        totalItems: totalVideos,
+        extra: {
+            tag: {
+                id: resolvedTag.id,
+                name: resolvedTag.name,
+                displayName: toDisplayTagName(resolvedTag.name),
+                slug: resolvedTag.name,
+            },
+            filters: {
+                sortBy: safeSortBy,
+                sortType: normalizedSortType,
+                personalizationBoost,
+                blockedChannels: suppression.blockedChannelIds.length,
+                hiddenVideos: suppression.notInterestedVideoIds.length,
+            },
+        },
+    });
+
+    const responseMessage = "Tag feed fetched successfully";
+
+    if (cacheParams) {
+        await setCachedValue({
+            scope: "feed:tag",
+            params: cacheParams,
+            value: { data: responseData, message: responseMessage },
+            ttlSeconds: TAG_FEED_CACHE_TTL_SECONDS,
+        });
+    }
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, responseData, responseMessage));
+});
+
 /**
  * HOME FEED
  * Mix of recent + popular videos
@@ -216,11 +903,13 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     let {
         page = "1",
         limit = "10",
+        tag = "",
         sortBy = "createdAt",
         sortType = "desc"
     } = req.query;
 
     const userId = req.user?.id || null;
+    const selectedTag = normalizeTagName(tag);
 
     // -------------------------------
     // Pagination validation
@@ -241,7 +930,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
 
     const shouldUseCache = Boolean(userId) && isCacheableWindow(safePage, safeLimit);
     const cacheParams = shouldUseCache
-        ? { userId, page: safePage, limit: safeLimit, sortBy, sortType }
+        ? { userId, page: safePage, limit: safeLimit, sortBy, sortType, tag: selectedTag || "all" }
         : null;
 
     if (cacheParams) {
@@ -261,7 +950,18 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // Base filter
     // -------------------------------
     const suppression = await getSuppressionFilterForUser(userId);
-    const whereClause = buildBaseFeedVideoWhere(suppression.whereExtra);
+    const whereClause = buildBaseFeedVideoWhere({
+        ...suppression.whereExtra,
+        ...(selectedTag && {
+            tags: {
+                some: {
+                    tag: {
+                        name: selectedTag,
+                    },
+                },
+            },
+        }),
+    });
 
     // -------------------------------
     // Fetch videos
@@ -323,7 +1023,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     }
 
     const personalizedWhereClause =
-        personalizedOrClauses.length > 0
+        !selectedTag && personalizedOrClauses.length > 0
             ? {
                 ...whereClause,
                 OR: personalizedOrClauses
@@ -348,7 +1048,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             ],
             skip,
             take: safeLimit,
-            select: HOME_FEED_SELECT
+            select: FEED_VIDEO_SELECT
         });
 
         // We still return full feed pagination/count and not only personalized subset.
@@ -371,7 +1071,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             orderBy: fallbackOrderBy,
             skip: exploreSkip,
             take: explorePoolTake,
-            select: HOME_FEED_SELECT,
+            select: FEED_VIDEO_SELECT,
         });
 
         // Deterministic shuffle gives diversity while remaining cache-friendly.
@@ -393,7 +1093,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             orderBy: fallbackOrderBy,
             skip,
             take: Math.max(exploreCount * 4, 12),
-            select: HOME_FEED_SELECT,
+            select: FEED_VIDEO_SELECT,
         });
 
         if (explorePool.length > 0) {
@@ -415,7 +1115,9 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // -------------------------------
     // Attach watch progress
     // -------------------------------
-    const videosWithProgress = await attachWatchProgress(videos, userId);
+    const videosWithProgress = flattenVideoTopicsList(
+        await attachWatchProgress(videos, userId)
+    );
 
     // -------------------------------
     // Total count for pagination
@@ -433,6 +1135,7 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
             filters: {
                 sortBy,
                 sortType,
+                tag: selectedTag || null,
                 blockedChannels: suppression.blockedChannelIds.length,
                 hiddenVideos: suppression.notInterestedVideoIds.length,
                 personalizedMatches: personalizedCount,
@@ -553,30 +1256,18 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
 
 
     // 3️⃣ Fetch videos
-    let videos = await prisma.video.findMany({
+    const videos = await prisma.video.findMany({
         where: videoWhere,
         orderBy: { createdAt: "desc" },
         skip,
         take: safeLimit,
-        select: {
-            id: true,
-            title: true,
-            thumbnail: true,
-            duration: true,
-            views: true,
-            createdAt: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    avatar: true
-                }
-            }
-        }
+        select: FEED_VIDEO_SELECT
     });
 
     // 4️⃣ Attach watch progress
-    const videosWithProgress = await attachWatchProgress(videos, userId);
+    const videosWithProgress = flattenVideoTopicsList(
+        await attachWatchProgress(videos, userId)
+    );
 
     // 5️⃣ Total count
     const totalVideos = await prisma.video.count({
@@ -682,7 +1373,7 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     // --------------------------
     // Fetch videos
     // --------------------------
-    let videos = await prisma.video.findMany({
+    const videos = await prisma.video.findMany({
         where: whereClause,
         orderBy:
             sortBy === "createdAt"
@@ -690,22 +1381,7 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
                 : [{ [sortBy]: sortType }, { createdAt: "desc" }],
         skip,
         take: safeLimit,
-        select: {
-            id: true,
-            title: true,
-            thumbnail: true,
-            duration: true,
-            views: true,
-            createdAt: true,
-            isShort: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    avatar: true
-                }
-            }
-        }
+        select: FEED_VIDEO_SELECT
     });
 
     // --------------------------
@@ -716,7 +1392,9 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     });
 
     const responseData = buildPaginatedListData({
-        items: videos,
+        items: flattenVideoTopicsList(
+            await attachWatchProgress(videos, userId)
+        ),
         currentPage: safePage,
         limit: safeLimit,
         totalItems: totalVideos,
@@ -813,6 +1491,28 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                     avatar: true
                 }
             },
+            tags: {
+                select: {
+                    tag: {
+                        select: {
+                            id: true,
+                            name: true,
+                        },
+                    },
+                },
+            },
+            categories: {
+                select: {
+                    category: {
+                        select: {
+                            id: true,
+                            name: true,
+                            slug: true,
+                            icon: true,
+                        },
+                    },
+                },
+            },
             _count: {
                 select: {
                     likes: true,
@@ -861,7 +1561,9 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
     }));
 
     // Attach watch progress
-    const shortsWithProgress = await attachWatchProgress(formattedShorts, userId);
+    const shortsWithProgress = flattenVideoTopicsList(
+        await attachWatchProgress(formattedShorts, userId)
+    );
 
     // Count for pagination
     const totalShorts = await prisma.video.count({

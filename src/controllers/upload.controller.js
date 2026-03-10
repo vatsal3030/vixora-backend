@@ -25,6 +25,8 @@ const MAX_VIDEO_DESCRIPTION_LENGTH = 5000;
 const MAX_TRANSCRIPT_INPUT_CHARS = 120000;
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 30;
+const MAX_VIDEO_CATEGORIES = 5;
+const MAX_CATEGORY_TOKEN_LENGTH = 80;
 const DEFAULT_UPLOAD_SESSION_TTL_MINUTES = 120;
 const ALLOWED_UPLOAD_SESSION_TYPES = new Set([
     "VIDEO",
@@ -114,6 +116,65 @@ const normalizeTags = (rawTags) => {
     }
 
     return normalized;
+};
+
+const collectCategoryTokens = (rawValue) => {
+    if (rawValue === undefined || rawValue === null || rawValue === "") return [];
+
+    if (Array.isArray(rawValue)) {
+        return rawValue.flatMap((item) => collectCategoryTokens(item));
+    }
+
+    if (typeof rawValue === "object") {
+        return [
+            rawValue.id,
+            rawValue.categoryId,
+            rawValue.slug,
+            rawValue.categorySlug,
+            rawValue.name,
+            rawValue.category,
+        ]
+            .map((entry) => normalizeText(entry))
+            .filter(Boolean);
+    }
+
+    return String(rawValue)
+        .split(",")
+        .map((entry) => normalizeText(entry))
+        .filter(Boolean);
+};
+
+const normalizeCategoryInput = (...rawValues) => {
+    const idSet = new Set();
+    const slugSet = new Set();
+    const nameSet = new Set();
+
+    const tokens = rawValues.flatMap((value) => collectCategoryTokens(value));
+
+    for (const token of tokens) {
+        const trimmed = normalizeText(token);
+        if (!trimmed || trimmed.length > MAX_CATEGORY_TOKEN_LENGTH) continue;
+
+        const normalized = trimmed.toLowerCase();
+        const looksLikeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            trimmed
+        );
+
+        if (looksLikeId) {
+            idSet.add(trimmed);
+        } else {
+            slugSet.add(normalized);
+            nameSet.add(normalized);
+        }
+
+        if (idSet.size + slugSet.size >= MAX_VIDEO_CATEGORIES) break;
+    }
+
+    return {
+        ids: [...idSet].slice(0, MAX_VIDEO_CATEGORIES),
+        slugs: [...slugSet].slice(0, MAX_VIDEO_CATEGORIES),
+        names: [...nameSet].slice(0, MAX_VIDEO_CATEGORIES),
+    };
 };
 
 const normalizeTranscriptSource = (rawSource) => {
@@ -510,6 +571,14 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
     const width = normalizeNumberOrNull(req.body?.width);
     const height = normalizeNumberOrNull(req.body?.height);
     const tags = normalizeTags(req.body?.tags);
+    const categoryInput = normalizeCategoryInput(
+        req.body?.categoryId,
+        req.body?.categoryIds,
+        req.body?.category,
+        req.body?.categories,
+        req.body?.categorySlug,
+        req.body?.categorySlugs
+    );
     const isShort = req.body?.isShort ?? false;
     const transcriptInput = req.body?.transcript ?? req.body?.transcriptText ?? "";
     const transcriptCuesInput =
@@ -630,9 +699,55 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
         const tagRecords = tagArray.length > 0
             ? await tx.tag.findMany({
                 where: { name: { in: tagArray } },
-                select: { id: true }
+                select: { id: true, name: true }
             })
             : [];
+
+        const categoryWhereOr = [];
+        if (categoryInput.ids.length > 0) {
+            categoryWhereOr.push({
+                id: {
+                    in: categoryInput.ids,
+                },
+            });
+        }
+
+        for (const slug of categoryInput.slugs) {
+            categoryWhereOr.push({
+                slug: {
+                    equals: slug,
+                    mode: "insensitive",
+                },
+            });
+        }
+
+        for (const name of categoryInput.names) {
+            categoryWhereOr.push({
+                name: {
+                    equals: name,
+                    mode: "insensitive",
+                },
+            });
+        }
+
+        const categoryRecords = categoryWhereOr.length > 0
+            ? await tx.category.findMany({
+                where: {
+                    isActive: true,
+                    OR: categoryWhereOr,
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                },
+                take: MAX_VIDEO_CATEGORIES,
+            })
+            : [];
+
+        if (categoryWhereOr.length > 0 && categoryRecords.length === 0) {
+            throw new ApiError(400, "Invalid category selection");
+        }
 
         /* ---------- SAFE PLAYBACK URL ---------- */
 
@@ -728,7 +843,21 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
             });
         }
 
-        return newVideo;
+        if (categoryRecords.length > 0) {
+            await tx.videoCategory.createMany({
+                data: categoryRecords.map((category) => ({
+                    videoId: newVideo.id,
+                    categoryId: category.id,
+                })),
+                skipDuplicates: true,
+            });
+        }
+
+        return {
+            ...newVideo,
+            tags: tagRecords.map((tag) => tag.name),
+            categories: categoryRecords,
+        };
     });
 
     /* ---------- MARK SESSION COMPLETE ---------- */
