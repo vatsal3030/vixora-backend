@@ -36,6 +36,7 @@ const envSchema = z
     RUN_WORKER: z.string().optional(),
     RUN_WORKER_ON_DEMAND: z.string().optional(),
     QUEUE_ENABLED: z.string().optional(),
+    CACHE_REDIS_SCOPE_MODE: z.string().optional(),
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
     GOOGLE_CALLBACK_URL: z.string().optional(),
@@ -97,6 +98,13 @@ export const validateRuntimeEnv = () => {
   const env = parsed.success ? parsed.data : process.env;
   const nodeEnv = cleanEnv(env.NODE_ENV) || "development";
   const strict = parseBool(env.ENV_VALIDATE_STRICT, nodeEnv === "production");
+  const allowedNodeEnvs = new Set(["development", "production", "test"]);
+  if (!allowedNodeEnvs.has(nodeEnv)) {
+    pushIssue(
+      warnings,
+      `NODE_ENV="${nodeEnv}" is non-standard. Use development, production, or test.`
+    );
+  }
 
   const portRaw = cleanEnv(env.PORT);
   if (portRaw) {
@@ -160,6 +168,14 @@ export const validateRuntimeEnv = () => {
     pushIssue(
       warnings,
       "QUEUE_ENABLED is true while REDIS_ENABLED is false; queue will run in fallback/direct mode."
+    );
+  }
+
+  const redisScopeMode = cleanEnv(env.CACHE_REDIS_SCOPE_MODE).toLowerCase();
+  if (redisScopeMode && !["allowlist", "all"].includes(redisScopeMode)) {
+    pushIssue(
+      warnings,
+      'CACHE_REDIS_SCOPE_MODE should be "allowlist" or "all".'
     );
   }
 

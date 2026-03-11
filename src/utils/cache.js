@@ -23,6 +23,7 @@ const parsePositiveInt = (value, defaultValue) => {
   return Math.floor(parsed);
 };
 
+const NODE_ENV = String(process.env.NODE_ENV || "").trim();
 const CACHE_NAMESPACE = String(process.env.CACHE_NAMESPACE || "vixora").trim();
 const CACHE_DEFAULT_TTL_SECONDS = parsePositiveInt(
   process.env.CACHE_DEFAULT_TTL_SECONDS,
@@ -32,14 +33,22 @@ const CACHE_L1_ENABLED = parseBool(process.env.CACHE_L1_ENABLED, true);
 const CACHE_L1_MAX_ENTRIES = parsePositiveInt(process.env.CACHE_L1_MAX_ENTRIES, 300);
 const CACHE_REDIS_MIN_TTL_SECONDS = parsePositiveInt(
   process.env.CACHE_REDIS_MIN_TTL_SECONDS,
-  String(process.env.NODE_ENV || "").trim() === "production" ? 60 : 15
+  NODE_ENV === "production" ? 60 : 15
 );
-const CACHE_REDIS_SCOPE_ALLOWLIST = normalizeList(
-  process.env.CACHE_REDIS_SCOPE_ALLOWLIST ||
-    (String(process.env.NODE_ENV || "").trim() === "production"
+const CACHE_REDIS_SCOPE_MODE = String(process.env.CACHE_REDIS_SCOPE_MODE || "allowlist")
+  .trim()
+  .toLowerCase();
+const CACHE_REDIS_SCOPE_ALLOWLIST_RAW =
+  process.env.CACHE_REDIS_SCOPE_ALLOWLIST !== undefined
+    ? String(process.env.CACHE_REDIS_SCOPE_ALLOWLIST)
+    : NODE_ENV === "production"
       ? "video:detail,channel:info,channel:about"
-      : "")
-);
+      : "";
+const CACHE_REDIS_SCOPE_ALLOWLIST = normalizeList(CACHE_REDIS_SCOPE_ALLOWLIST_RAW);
+const CACHE_REDIS_ALLOW_ALL_SCOPES =
+  CACHE_REDIS_SCOPE_MODE === "all" ||
+  CACHE_REDIS_SCOPE_ALLOWLIST.includes("*") ||
+  CACHE_REDIS_SCOPE_ALLOWLIST.includes("all");
 
 const l1Cache = new Map();
 
@@ -104,6 +113,7 @@ const buildStoredValue = (value, ttlSeconds) => ({
 });
 
 const isRedisScopeAllowed = (scope) => {
+  if (CACHE_REDIS_ALLOW_ALL_SCOPES) return true;
   if (CACHE_REDIS_SCOPE_ALLOWLIST.length === 0) return true;
   return CACHE_REDIS_SCOPE_ALLOWLIST.some((allowedScope) =>
     scope === allowedScope || scope.startsWith(`${allowedScope}:`)

@@ -337,8 +337,8 @@ Endpoint:
 
 Scopes:
 
-- `scope=all` for grouped results (`videos/channels/tweets/playlists`)
-- `scope=videos|channels|tweets|playlists` for paginated typed results
+- `scope=all` for grouped results (`videos/shorts/channels/tweets/playlists`)
+- `scope=videos|shorts|channels|tweets|playlists` for paginated typed results
 
 Filters:
 
@@ -346,12 +346,47 @@ Filters:
 - `tags` (video-oriented)
 - `category` / `channelCategory`
 - `sortBy`, `sortType`
+- `sortBy=relevance` supported across all scopes
 
 Free-tier notes:
 
 - short TTL cached responses (L1 + optional Redis)
 - grouped mode defaults to small per-type limit
 - search-history logging only for authenticated users and non-trivial queries
+
+### 5.13.1 Tweet Feed + Hot Topics
+
+Endpoints:
+
+- `GET /api/v1/tweets/feed` (optional auth)
+- `GET /api/v1/tweets/explore` (alias of feed)
+- `GET /api/v1/tweets/:tweetId` (public detail, optional auth)
+- `GET /api/v1/tweets/topics/hot` (optional auth)
+
+Feed query:
+
+- `mode=forYou|following|latest|hot`
+- `page`, `limit`
+- `topic`
+- `sortType=desc|asc`
+
+Feed behavior:
+
+- guest default: `hot`
+- authenticated default: `forYou`
+- `mode=following` requires auth
+- response uses normalized list payload + extras:
+  - `mode`, `filters.topic`, `ranking`, `followingChannelsCount`, `blockedChannels`
+- tweet item fields include:
+  - base tweet + owner
+  - `likesCount`, `commentsCount`, `isLikedByMe`, `topics[]`
+
+Hot topics behavior:
+
+- windowed topic extraction + scoring (mentions + engagement + recency)
+- response shape:
+  - `windowHours`, `generatedAt`, `items[]`
+  - each item: `topic`, `displayName`, `slug`, `mentions`, `engagement`, `trendScore`, `sampleTweetIds`
 
 ### 5.14 Feedback + Reporting
 

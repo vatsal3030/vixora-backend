@@ -391,6 +391,9 @@ Base: `/api/v1/auth`
 | GET | `/google` | No | Start Google OAuth |
 | GET | `/google/callback` | No | OAuth callback (sets cookies + redirects frontend) |
 
+OAuth note:
+- Google sign-in/signup now auto-generates a unique `username` if missing.
+
 ## Users/Auth
 
 Base: `/api/v1/users`
@@ -529,16 +532,18 @@ Base: `/api/v1/search` (public; optional token supported)
 |---|---|---|
 | GET | `/` | `q,scope,type,tags,category,channelCategory,sortBy,sortType` |
 | GET | `/` | for `scope=all`: `perTypeLimit` (default `5`, max `15`) |
-| GET | `/` | for typed scope: `page,limit` (`videos|channels|tweets|playlists`) |
+| GET | `/` | for typed scope: `page,limit` (`videos|shorts|channels|tweets|playlists`) |
 
 Notes:
 
-- `scope` (or alias `type`): `all|videos|channels|tweets|playlists`
+- `scope` (or alias `type`): `all|videos|shorts|channels|tweets|playlists`
+- sort supports `sortBy=relevance` for all scopes
 - search is public-only:
-  - videos: published + completed + non-deleted
-  - channels: non-deleted
-  - playlists: public + non-deleted
-  - tweets: non-deleted
+  - videos: published + completed + non-deleted + public owner
+  - shorts: same as videos + `isShort=true`
+  - channels: non-deleted + `moderationStatus=ACTIVE` + public profile
+  - playlists: public + non-deleted + public owner
+  - tweets: non-deleted + public owner
 - `tags` and `category` primarily affect video search.
 - `channelCategory` is alias of `category` for channel filtering.
 - response is cached briefly (L1/Redis) to reduce DB load on free tier.
@@ -555,12 +560,14 @@ Notes:
   "limits": { "perTypeLimit": 5 },
   "results": {
     "videos": [],
+    "shorts": [],
     "channels": [],
     "tweets": [],
     "playlists": []
   },
   "totals": {
     "videos": 12,
+    "shorts": 6,
     "channels": 3,
     "tweets": 8,
     "playlists": 2
@@ -568,7 +575,7 @@ Notes:
 }
 ```
 
-#### `scope=videos|channels|tweets|playlists`
+#### `scope=videos|shorts|channels|tweets|playlists`
 
 Returns normalized list payload:
 
@@ -1042,17 +1049,27 @@ Base: `/api/v1/playlists` (protected)
 
 ## Tweets
 
-Base: `/api/v1/tweets` (protected)
+Base: `/api/v1/tweets` (public feed + protected CRUD)
 
 | Method | Endpoint | Request |
 |---|---|---|
+| GET | `/feed` | query: `mode(forYou|following|latest|hot),page,limit,topic,sortType` |
+| GET | `/explore` | alias of `/feed` |
+| GET | `/topics/hot` | query: `limit,windowHours,q` |
+| GET | `/:tweetId` | public detail (optional auth; returns `isLikedByMe` when logged in) |
 | POST | `/` | body: `{ content, imagePublicId? }` |
 | GET | `/user/:userId` | query: `page,limit,sortBy,sortType` |
 | GET | `/trash/me` | query: `page,limit` |
 | PATCH | `/:tweetId/restore` | none |
-| GET | `/:tweetId` | none |
 | PATCH | `/:tweetId` | body: `{ content }` |
 | DELETE | `/:tweetId` | none |
+
+Tweet feed notes:
+- `/feed` supports optional auth: guests get public hot/latest style, logged users can use personalized `forYou`.
+- `mode=following` requires auth.
+- Feed response is normalized list shape with extras: `mode`, `filters.topic`, `ranking`, `followingChannelsCount`, `blockedChannels`.
+- Each tweet item includes `likesCount`, `commentsCount`, `isLikedByMe`, and extracted `topics`.
+- `/topics/hot` returns `{ windowHours, generatedAt, items[] }`; each topic has `mentions`, `engagement`, `trendScore`, and `sampleTweetIds`.
 
 ## Notifications
 
@@ -1229,7 +1246,8 @@ Watch history notes:
 - Stream-only load (optional): `/api/v1/watch/:videoId/stream`
 - Transcript panel: `/api/v1/watch/:videoId/transcript` (supports `q`, `from`, `to`, paging)
 - AI assistant/chat: `/api/v1/ai/sessions`, `/api/v1/ai/sessions/:sessionId`, `/api/v1/ai/sessions/:sessionId/messages`, `/api/v1/ai/videos/:videoId/summary`, `/api/v1/ai/videos/:videoId/ask`
-- Global search bar: `/api/v1/search?scope=all&q=...` and typed search (`scope=videos|channels|tweets|playlists`)
+- Global search bar: `/api/v1/search?scope=all&q=...` and typed search (`scope=videos|shorts|channels|tweets|playlists`, `sortBy=relevance`)
+- Tweet page (X-style): `/api/v1/tweets/feed?mode=forYou|following|latest|hot` + `/api/v1/tweets/topics/hot`
 - Upload studio: `/api/v1/upload/session` -> `/api/v1/upload/signature` -> Cloudinary direct upload -> `/api/v1/upload/finalize/:sessionId` -> `/api/v1/videos/:videoId/processing-status` -> `/api/v1/videos/:videoId/publish`
 - Comments panel: `/api/v1/comments/:videoId`, `/api/v1/likes/toggle/c/:commentId`
 - Channel page: `/api/v1/channels/:channelId`, `/about`, `/videos`, `/shorts`, `/playlists`, `/tweets`

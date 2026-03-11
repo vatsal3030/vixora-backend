@@ -286,6 +286,7 @@ Purpose: OAuth callback from Google.
 Behavior:
 - verifies state cookie
 - creates/links account
+- auto-generates unique `username` for Google users if missing
 - sets auth cookies
 - redirects to frontend URL
 
@@ -596,11 +597,19 @@ Response:
 ## 10.1 `GET /search`
 Query:
 - `q`
-- `scope` (alias `type`): `all|videos|channels|tweets|playlists`
+- `scope` (alias `type`): `all|videos|shorts|channels|tweets|playlists`
 - `tags` (csv)
 - `category`
 - `channelCategory` (alias for category)
 - `sortBy`, `sortType`
+
+Sort behavior:
+- `sortBy=relevance` supported for all scopes (query-aware ranking)
+- video/shorts: `views|duration|title|createdAt|relevance`
+- channels: `subscribers|username|name|fullName|createdAt|relevance`
+- playlists: `name|videoCount|duration|createdAt|updatedAt|relevance`
+- tweets: `likes|comments|createdAt|relevance`
+- `sortType=desc|asc` (default `desc`)
 
 For `scope=all`:
 - optional `perTypeLimit` (default 5, max 15)
@@ -610,7 +619,7 @@ For typed scope:
 
 Response for `scope=all`:
 - `scope`, `query`, `filters`, `limits`
-- `results`: grouped arrays (`videos`, `channels`, `tweets`, `playlists`)
+- `results`: grouped arrays (`videos`, `shorts`, `channels`, `tweets`, `playlists`)
 - `totals` per type
 
 Response for typed scope:
@@ -618,10 +627,11 @@ Response for typed scope:
 - plus `scope`, `query`, `filters`
 
 Indexing/visibility rules:
-- videos: published + completed + non-deleted + non-deleted owner
-- channels: non-deleted
-- playlists: public + non-deleted
-- tweets: non-deleted
+- videos: published + completed + non-deleted + public owner
+- shorts: same as videos + `isShort=true`
+- channels: non-deleted + `moderationStatus=ACTIVE` + public profile
+- playlists: public + non-deleted + public owner
+- tweets: non-deleted + public owner
 
 ---
 
@@ -806,13 +816,43 @@ Visibility:
 
 ---
 
-## 18) Tweets (`/api/v1/tweets`, auth)
+## 18) Tweets (`/api/v1/tweets`, public + auth)
 
+Public feed endpoints (optional auth token accepted):
+- `GET /tweets/feed`
+  - query:
+    - `mode`: `forYou|following|latest|hot` (default: `forYou` when logged in, `hot` for guests)
+    - `page`, `limit` (default `20`, max `50`)
+    - `topic` (filter feed by topic/hashtag text)
+    - `sortType`: `desc|asc` (mostly useful for `latest`)
+  - response:
+    - normalized list payload (`items`, `pagination`)
+    - `mode`, `filters.topic`, `ranking`, `followingChannelsCount`, `blockedChannels`
+    - each tweet item includes:
+      - `id`, `content`, `image`, `createdAt`
+      - `owner` (`id,username,fullName,avatar`)
+      - `likesCount`, `commentsCount`
+      - `isLikedByMe` (true only when caller is authenticated and liked)
+      - `topics` (extracted keyword/hashtag hints)
+- `GET /tweets/explore`
+  - alias of `/tweets/feed`
+- `GET /tweets/:tweetId`
+  - public tweet detail (optional auth)
+  - includes `isLikedByMe` when caller is authenticated
+- `GET /tweets/topics/hot`
+  - query:
+    - `limit` (default `12`, max `30`)
+    - `windowHours` (default `72`, max `336`)
+    - `q` (filter topic substring)
+  - response:
+    - `windowHours`, `generatedAt`
+    - `items[]` with `topic`, `displayName`, `slug`, `mentions`, `engagement`, `trendScore`, `sampleTweetIds`
+
+Auth-protected tweet CRUD endpoints:
 - `POST /tweets` body `{ content, imagePublicId? }`
 - `GET /tweets/user/:userId`
 - `GET /tweets/trash/me`
 - `PATCH /tweets/:tweetId/restore`
-- `GET /tweets/:tweetId`
 - `PATCH /tweets/:tweetId` body `{ content }`
 - `DELETE /tweets/:tweetId`
 

@@ -23,6 +23,12 @@ const parseBool = (value, defaultValue = false) => {
   return ["1", "true", "yes", "on"].includes(normalized);
 };
 
+const parsePositiveInt = (value, fallbackValue) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallbackValue;
+  return Math.floor(parsed);
+};
+
 const redisUrl = cleanEnv(process.env.REDIS_URL);
 const redisHost = cleanEnv(process.env.REDIS_HOST);
 const redisPort = Number(process.env.REDIS_PORT || 6379);
@@ -50,20 +56,39 @@ const isQueueEnabled = parseBool(
 const shouldUseRedisQueue = isQueueEnabled;
 const shouldUseRedisCache = isCacheEnabled && isRedisCacheEnabled;
 const shouldUseRedis = shouldUseRedisQueue || shouldUseRedisCache;
-const REDIS_ERROR_LOG_COOLDOWN_MS = Number(process.env.REDIS_ERROR_LOG_COOLDOWN_MS || 30000);
+const REDIS_ERROR_LOG_COOLDOWN_MS = parsePositiveInt(
+  process.env.REDIS_ERROR_LOG_COOLDOWN_MS,
+  30000
+);
+const REDIS_RECONNECT_LOG_COOLDOWN_MS = parsePositiveInt(
+  process.env.REDIS_RECONNECT_LOG_COOLDOWN_MS,
+  5000
+);
 
 export const isTransientRedisError = (err) => {
   const code = String(err?.code || "").toUpperCase();
   const message = String(err?.message || "").toLowerCase();
 
-  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "EPIPE") {
+  if (
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "EPIPE" ||
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    code === "ECONNREFUSED" ||
+    code === "ECONNABORTED" ||
+    code === "ENETUNREACH" ||
+    code === "EHOSTUNREACH"
+  ) {
     return true;
   }
 
   return (
     message.includes("read econnreset") ||
     message.includes("socket hang up") ||
-    message.includes("connection reset")
+    message.includes("connection reset") ||
+    message.includes("getaddrinfo enotfound") ||
+    message.includes("temporary failure in name resolution")
   );
 };
 
@@ -99,6 +124,7 @@ const attachRedisListeners = (connection) => {
   attachedConnections.add(connection);
 
   let lastErrorLogAt = 0;
+  let lastReconnectLogAt = 0;
 
   connection.on("connect", () => {
     metrics.recordRedisEvent("connected");
@@ -107,7 +133,11 @@ const attachRedisListeners = (connection) => {
 
   connection.on("reconnecting", () => {
     metrics.recordRedisEvent("reconnecting");
-    console.warn("Redis reconnecting...");
+    const now = Date.now();
+    if (now - lastReconnectLogAt >= REDIS_RECONNECT_LOG_COOLDOWN_MS) {
+      lastReconnectLogAt = now;
+      console.warn("Redis reconnecting...");
+    }
   });
 
   connection.on("error", (err) => {

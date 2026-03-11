@@ -98,7 +98,8 @@ Preferred:
 
 ### 2.4 Global search bar
 - Use `GET /search?scope=all&q=...` for mixed results dropdown/page
-- Use `scope=videos|channels|tweets|playlists` for dedicated tab pages
+- Use `scope=videos|shorts|channels|tweets|playlists` for dedicated tab pages
+- For YouTube-like ranking, pass `sortBy=relevance&sortType=desc`
 
 ### 2.5 AI chatbox
 - open/create session: `POST /ai/sessions`
@@ -276,13 +277,42 @@ Each returns `data.items` + `data.pagination`.
 ## 5.4 Search route contract
 `GET /search`
 Parameters:
-- `scope`: `all|videos|channels|tweets|playlists`
+- `scope`: `all|videos|shorts|channels|tweets|playlists`
 - `q`
 - optional filters: `tags`, `category`, `channelCategory`, sort fields
+- `sortBy=relevance` supported across all scopes
 
 Response:
-- if `scope=all`: grouped buckets in `data.results`
+- if `scope=all`: grouped buckets in `data.results` (`videos`, `shorts`, `channels`, `tweets`, `playlists`)
 - if typed scope: `data.items` + `data.pagination`
+
+## 5.5 Tweet feed contract (X/Twitter-style)
+`GET /tweets/feed` (optional auth)
+
+Parameters:
+- `mode`: `forYou|following|latest|hot`
+- `page`, `limit` (default `20`, max `50`)
+- `topic` (optional topic/hashtag filter)
+- `sortType`: `desc|asc`
+
+Behavior:
+- guest default mode: `hot`
+- logged-in default mode: `forYou`
+- `mode=following` requires auth
+- response uses normalized list payload + extras:
+  - `mode`, `filters.topic`, `ranking`, `followingChannelsCount`, `blockedChannels`
+- each item includes:
+  - tweet core data + owner
+  - `likesCount`, `commentsCount`, `isLikedByMe`, `topics[]`
+
+Hot topics:
+- `GET /tweets/topics/hot`
+- query: `limit`, `windowHours`, `q`
+- returns `{ windowHours, generatedAt, items[] }`
+
+Tweet detail:
+- `GET /tweets/:tweetId` (public, optional auth)
+- includes `isLikedByMe` when logged in
 
 ---
 
