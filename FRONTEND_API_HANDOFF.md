@@ -1,6 +1,6 @@
 # Frontend API Handoff
 
-Last updated: 2026-02-28
+Last updated: 2026-03-11
 Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`
 
 Primary in-depth contract (use this first for frontend implementation and AI agents):
@@ -10,6 +10,11 @@ Primary in-depth contract (use this first for frontend implementation and AI age
 For implementation-depth frontend guidance (route selection, per-screen call sequence, admin UI blueprint, role assignment flow), read:
 
 - `FRONTEND_INTEGRATION_PLAYBOOK.md`
+
+Delta note (2026-03-11):
+- No endpoint path or request/response schema changes.
+- Feed-ranking score recalculation now runs on video like/unlike, comment create/delete, and subscription toggle in both directions (async).
+- Feedback report telemetry now records `entityType` that matches report `targetType` (`VIDEO|COMMENT|USER|CHANNEL`).
 
 ## 1) Base URL and Global Behavior
 
@@ -977,6 +982,9 @@ Base: `/api/v1/comments`
 | PATCH | `/c/:commentId` | Yes | body: `{ content }` |
 | DELETE | `/c/:commentId` | Yes | none |
 
+Behavior note:
+- `POST /:videoId` and `DELETE /c/:commentId` trigger async video score refresh, so feed ordering updates shortly after mutation.
+
 ## Likes
 
 Base: `/api/v1/likes` (protected)
@@ -987,6 +995,9 @@ Base: `/api/v1/likes` (protected)
 | POST | `/toggle/c/:commentId` | Toggle comment like |
 | POST | `/toggle/t/:tweetId` | Toggle tweet like |
 | GET | `/videos` | Liked videos list |
+
+Behavior note:
+- `POST /toggle/v/:videoId` recalculates video score on both like and unlike (async background update).
 
 ## Subscriptions
 
@@ -1000,6 +1011,9 @@ Base: `/api/v1/subscriptions` (protected)
 | GET | `/u/subscriptions` | query: `page,limit` |
 | PATCH | `/c/:channelId/notifications` | body: `{ level }` where `ALL|PERSONALIZED|NONE` |
 | GET | `/c/:channelId/status` | none |
+
+Behavior note:
+- `POST /c/:channelId/subscribe` (toggle) recalculates channel video scores for both subscribe and unsubscribe actions (async).
 
 ## Channels
 

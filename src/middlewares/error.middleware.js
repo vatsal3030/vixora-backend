@@ -1,4 +1,4 @@
-export const globalErrorHandler = (err, req, res, next) => {
+export const globalErrorHandler = (err, req, res, _next) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || "Internal Server Error";
   const isDev = process.env.NODE_ENV === "development";

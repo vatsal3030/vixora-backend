@@ -27,6 +27,15 @@ const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 30;
 const MAX_VIDEO_CATEGORIES = 5;
 const MAX_CATEGORY_TOKEN_LENGTH = 80;
+const MAX_CATEGORY_NAME_LENGTH = 80;
+const CATEGORY_PLACEHOLDER_TOKENS = new Set([
+    "other",
+    "others",
+    "none",
+    "uncategorized",
+    "no-category",
+    "n/a",
+]);
 const DEFAULT_UPLOAD_SESSION_TTL_MINUTES = 120;
 const ALLOWED_UPLOAD_SESSION_TYPES = new Set([
     "VIDEO",
@@ -156,6 +165,8 @@ const normalizeCategoryInput = (...rawValues) => {
         if (!trimmed || trimmed.length > MAX_CATEGORY_TOKEN_LENGTH) continue;
 
         const normalized = trimmed.toLowerCase();
+        // Ignore UI placeholder options (like "Other") so uploads don't fail.
+        if (CATEGORY_PLACEHOLDER_TOKENS.has(normalized)) continue;
         const looksLikeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
             trimmed
         );
@@ -175,6 +186,49 @@ const normalizeCategoryInput = (...rawValues) => {
         slugs: [...slugSet].slice(0, MAX_VIDEO_CATEGORIES),
         names: [...nameSet].slice(0, MAX_VIDEO_CATEGORIES),
     };
+};
+
+const toCategorySlug = (value) =>
+    normalizeText(value)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, "")
+        .trim()
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
+        .slice(0, MAX_CATEGORY_TOKEN_LENGTH);
+
+const toCategoryDisplayName = (value) =>
+    normalizeText(value)
+        .split(/[\s_-]+/)
+        .filter(Boolean)
+        .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+        .join(" ")
+        .trim()
+        .slice(0, MAX_CATEGORY_NAME_LENGTH);
+
+const buildCategorySeedRows = (categoryInput) => {
+    const rows = [];
+    const seenSlugs = new Set();
+    const seedTokens = [...categoryInput.slugs, ...categoryInput.names];
+
+    for (const token of seedTokens) {
+        if (rows.length >= MAX_VIDEO_CATEGORIES) break;
+
+        const lowered = normalizeText(token).toLowerCase();
+        if (!lowered || CATEGORY_PLACEHOLDER_TOKENS.has(lowered)) continue;
+
+        const slug = toCategorySlug(token);
+        if (!slug || seenSlugs.has(slug) || CATEGORY_PLACEHOLDER_TOKENS.has(slug)) continue;
+
+        seenSlugs.add(slug);
+        rows.push({
+            slug,
+            name: toCategoryDisplayName(token) || toCategoryDisplayName(slug),
+            isActive: true,
+        });
+    }
+
+    return rows;
 };
 
 const normalizeTranscriptSource = (rawSource) => {
@@ -730,7 +784,7 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
             });
         }
 
-        const categoryRecords = categoryWhereOr.length > 0
+        let categoryRecords = categoryWhereOr.length > 0
             ? await tx.category.findMany({
                 where: {
                     isActive: true,
@@ -744,6 +798,29 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
                 take: MAX_VIDEO_CATEGORIES,
             })
             : [];
+
+        if (categoryWhereOr.length > 0 && categoryRecords.length === 0) {
+            const categorySeedRows = buildCategorySeedRows(categoryInput);
+            if (categorySeedRows.length > 0) {
+                await tx.category.createMany({
+                    data: categorySeedRows,
+                    skipDuplicates: true,
+                });
+
+                categoryRecords = await tx.category.findMany({
+                    where: {
+                        isActive: true,
+                        OR: categoryWhereOr,
+                    },
+                    select: {
+                        id: true,
+                        name: true,
+                        slug: true,
+                    },
+                    take: MAX_VIDEO_CATEGORIES,
+                });
+            }
+        }
 
         if (categoryWhereOr.length > 0 && categoryRecords.length === 0) {
             throw new ApiError(400, "Invalid category selection");

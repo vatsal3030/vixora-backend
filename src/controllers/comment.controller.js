@@ -8,6 +8,42 @@ import { buildPaginatedListData } from "../utils/listResponse.js";
 
 const MAX_COMMENT_LENGTH = 1000;
 
+const updateVideoScore = async (videoId) => {
+    if (!videoId) return;
+
+    const [video, likesCount, commentsCount, watchCount] = await Promise.all([
+        prisma.video.findUnique({
+            where: { id: videoId },
+            select: { views: true },
+        }),
+        prisma.like.count({ where: { videoId } }),
+        prisma.comment.count({ where: { videoId, isDeleted: false } }),
+        prisma.watchHistory.count({ where: { videoId } }),
+    ]);
+
+    if (!video) return;
+
+    const score =
+        video.views * 0.3 +
+        likesCount * 0.4 +
+        commentsCount * 0.2 +
+        watchCount * 0.1;
+
+    await prisma.video.update({
+        where: { id: videoId },
+        data: {
+            popularityScore: score,
+            engagementScore: score / 10,
+        },
+    });
+};
+
+const refreshVideoScoreInBackground = (videoId) => {
+    void updateVideoScore(videoId).catch((error) => {
+        console.error("Failed to update video score:", error?.message || error);
+    });
+};
+
 export const getVideoComments = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
@@ -175,6 +211,7 @@ export const addComment = asyncHandler(async (req, res) => {
             },
         },
     });
+    refreshVideoScoreInBackground(videoId);
 
     return res.status(201).json(
         new ApiResponse(201, comment, "Comment added successfully")
@@ -266,6 +303,7 @@ export const deleteComment = asyncHandler(async (req, res) => {
             id: true,
             ownerId: true,
             isDeleted: true,
+            videoId: true,
         },
     });
 
@@ -291,6 +329,7 @@ export const deleteComment = asyncHandler(async (req, res) => {
             deletedAt: new Date(),
         },
     });
+    refreshVideoScoreInBackground(existingComment.videoId);
 
     return res.status(200).json(
         new ApiResponse(200, {}, "Comment deleted successfully")

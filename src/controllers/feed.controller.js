@@ -852,8 +852,9 @@ export const getTagFeed = asyncHandler(async (req, res) => {
                     : b._tagFeedScore - a._tagFeedScore
             )
             .map((video) => {
-                const { _tagFeedScore, ...rest } = video;
-                return rest;
+                const normalizedVideo = { ...video };
+                delete normalizedVideo._tagFeedScore;
+                return normalizedVideo;
             });
     }
 

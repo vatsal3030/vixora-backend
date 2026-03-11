@@ -1,6 +1,6 @@
 # Frontend API Contract (Full In-Depth)
 
-Last updated: 2026-03-01
+Last updated: 2026-03-11
 Source of truth: `src/app.js`, `src/routes/*`, `src/controllers/*`, `src/utils/*`, `src/middlewares/*`, `prisma/schema.prisma`
 
 This file is the single integration contract for frontend engineers and frontend AI agents.
@@ -13,6 +13,11 @@ Use this file when building:
 - upload/Cloudinary flows
 
 If a conflict exists between old docs and this file, follow this file and backend source code.
+
+Delta note (2026-03-11):
+- No route/path or request/response schema changes.
+- Feed ranking score recalculation now runs on: video like, video unlike, comment create, comment delete, and subscription toggle in both directions.
+- Feedback report telemetry now records `entityType` that matches report `targetType` (`VIDEO|COMMENT|USER|CHANNEL`).
 
 ---
 
@@ -712,6 +717,9 @@ Daily limits:
 
 - `GET /feedback/reports/me?page&limit`
 
+Behavior note:
+- Report audit/event telemetry stores the same entity class as submitted `targetType` (`VIDEO|COMMENT|USER|CHANNEL`).
+
 Purpose:
 - recommendation suppression controls
 - user reporting funnel into admin moderation.
@@ -728,6 +736,7 @@ Purpose:
 Response:
 - lists use normalized list format
 - mutate endpoints return created/updated object or `{}` for deletes
+- score impact: create/delete comment triggers async video score refresh, so feed order updates are eventually consistent.
 
 ---
 
@@ -740,6 +749,9 @@ Response:
 
 Toggle response `data`:
 - `{ "status": "liked" }` or `{ "status": "unliked" }`
+
+Behavior note:
+- `POST /likes/toggle/v/:videoId` updates video score on both like and unlike (async background recalculation).
 
 ---
 
@@ -754,6 +766,9 @@ Toggle response `data`:
 
 `level` enum:
 - `ALL|PERSONALIZED|NONE`
+
+Behavior note:
+- `POST /subscriptions/c/:channelId/subscribe` updates channel video scores on both subscribe and unsubscribe (async background recalculation).
 
 ---
 

@@ -49,10 +49,15 @@ export const updateVideoScore = async (videoId) => {
     });
 };
 
+const refreshVideoScoreInBackground = (videoId) => {
+    void updateVideoScore(videoId).catch((error) => {
+        console.error("Failed to update video score:", error?.message || error);
+    });
+};
+
 
 export const toggleVideoLike = asyncHandler(async (req, res) => {
     const { videoId } = req.params
-    //TODO: toggle like on video
 
     if (!videoId) {
         throw new ApiError(400, "video ID is required");
@@ -87,7 +92,7 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
     const existingLike = await prisma.like.findUnique({
         where: {
             likedById_videoId: {
-                likedById: req.user.id,
+                likedById: userId,
                 videoId: videoId
             }
         }
@@ -99,6 +104,7 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
                 id: existingLike.id
             }
         })
+        refreshVideoScoreInBackground(videoId);
         return res.status(200).json(
             new ApiResponse(200, { status: "unliked" }, "Video unliked")
         );
@@ -107,12 +113,12 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
 
     await prisma.like.create({
         data: {
-            likedById: req.user.id,
+            likedById: userId,
             videoId: videoId
         }
     })
 
-    await updateVideoScore(videoId)
+    refreshVideoScoreInBackground(videoId);
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Video liked")

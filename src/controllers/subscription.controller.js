@@ -84,6 +84,9 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
             where: { id: existingSubscription.id },
         });
 
+        // Keep feed score aligned when subscription affinity is removed.
+        void updateChannelVideoScores(channelId).catch(() => null);
+
         const subscriberCount = await prisma.subscription.count({
             where: { channelId },
         });

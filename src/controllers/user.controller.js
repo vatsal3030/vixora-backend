@@ -1,7 +1,7 @@
 import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/ApiError.js";
 import prisma from "../db/prisma.js";
-import uploadOnCloudinary, { deleteImageOnCloudinary } from "../utils/cloudinary.js";
+import { deleteImageOnCloudinary } from "../utils/cloudinary.js";
 import { createUserSchema } from "../schemas/createUserSchema.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 import ApiResponse from "../utils/ApiResponse.js";
@@ -306,7 +306,7 @@ export const generateAccessAndRefreshToken = async (userId) => {
 
         return { accessToken, refreshToken }
 
-    } catch (error) {
+    } catch {
         throw new ApiError(400, "Something went wrong while genrating refresh and access token")
     }
 }
@@ -781,7 +781,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
                     "Access token refreshed successfully"
                 )
             );
-    } catch (error) {
+    } catch {
         return res
             .status(401)
             .clearCookie("accessToken", cookieOptions)

@@ -6,6 +6,12 @@ import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
 
 const REPORT_TARGET_TYPES = new Set(["VIDEO", "COMMENT", "USER", "CHANNEL"]);
+const REPORT_EVENT_ENTITY_MAP = Object.freeze({
+  VIDEO: "VIDEO",
+  COMMENT: "COMMENT",
+  USER: "USER",
+  CHANNEL: "CHANNEL",
+});
 const MAX_REPORT_REASON_LENGTH = 120;
 const MAX_REPORT_DESCRIPTION_LENGTH = 2000;
 
@@ -350,7 +356,7 @@ export const createReport = asyncHandler(async (req, res) => {
     data: {
       userId: reporterId,
       eventType: "REPORT",
-      entityType: targetType === "CHANNEL" ? "CHANNEL" : "VIDEO",
+      entityType: REPORT_EVENT_ENTITY_MAP[targetType] || "VIDEO",
       entityId: targetId,
       metadata: {
         reportId: report.id,
