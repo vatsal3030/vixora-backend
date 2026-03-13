@@ -7,12 +7,14 @@ import { buildPaginatedListData } from "../utils/listResponse.js";
 import { getCachedValue, setCachedValue } from "../utils/cache.js";
 
 const SEARCH_CACHE_TTL_SECONDS = 20;
-const DEFAULT_ALL_LIMIT_PER_TYPE = 5;
-const MAX_ALL_LIMIT_PER_TYPE = 15;
-const DEFAULT_TYPED_LIMIT = 10;
-const MAX_TYPED_LIMIT = 50;
+const DEFAULT_ALL_LIMIT_PER_TYPE = 10;
+const MAX_ALL_LIMIT_PER_TYPE = 30;
+const DEFAULT_TYPED_LIMIT = 20;
+const MAX_TYPED_LIMIT = 100;
 const RELEVANCE_CANDIDATE_MULTIPLIER = 4;
 const MAX_RELEVANCE_CANDIDATES = 300;
+const BACKFILL_POOL_MULTIPLIER = 6;
+const MIN_BACKFILL_POOL_SIZE = 24;
 
 const normalizeText = (value) => String(value ?? "").trim();
 
@@ -125,6 +127,86 @@ const rankByRelevance = ({ items, sortType = "desc", scorer }) => {
       return a.index - b.index;
     })
     .map((entry) => entry.item);
+};
+
+const toStableSeed = (input) => {
+  const raw = String(input || "");
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const seededShuffle = (items, seedInput) => {
+  const arr = Array.isArray(items) ? [...items] : [];
+  if (arr.length <= 1) return arr;
+
+  let seed = toStableSeed(seedInput) || 1;
+  const rand = () => {
+    seed = Math.imul(seed, 1664525) + 1013904223;
+    seed >>>= 0;
+    return seed / 4294967296;
+  };
+
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+
+  return arr;
+};
+
+const normalizeNotClauses = (existingNot) => {
+  if (!existingNot) return [];
+  if (Array.isArray(existingNot)) return existingNot;
+  return [existingNot];
+};
+
+const addNotInIds = (where, ids = []) => {
+  const uniqueIds = [...new Set((ids || []).filter(Boolean))];
+  if (uniqueIds.length === 0) return where;
+
+  const baseNot = normalizeNotClauses(where?.NOT);
+  return {
+    ...where,
+    NOT: [...baseNot, { id: { in: uniqueIds } }],
+  };
+};
+
+const resolveBackfillPoolTake = (needed) =>
+  Math.min(
+    Math.max((Number(needed) || 0) * BACKFILL_POOL_MULTIPLIER, MIN_BACKFILL_POOL_SIZE),
+    MAX_RELEVANCE_CANDIDATES
+  );
+
+const resolveBackfillSkip = ({ skip = 0, primaryTotal = 0, fallbackTotal = 0 }) => {
+  const adjusted = Math.max(0, Number(skip || 0) - Math.max(0, Number(primaryTotal || 0)));
+  const total = Math.max(0, Number(fallbackTotal || 0));
+  if (total <= 0) return 0;
+  return adjusted >= total ? adjusted % total : adjusted;
+};
+
+const fillWithRandomBackfill = ({ primaryItems, fallbackItems, take, seedInput }) => {
+  const output = Array.isArray(primaryItems) ? [...primaryItems] : [];
+  if (output.length >= take) return output.slice(0, take);
+
+  const existingIds = new Set(output.map((item) => item?.id).filter(Boolean));
+  const filteredFallback = (Array.isArray(fallbackItems) ? fallbackItems : []).filter((item) => {
+    const id = item?.id;
+    if (!id || existingIds.has(id)) return false;
+    existingIds.add(id);
+    return true;
+  });
+
+  if (filteredFallback.length === 0) return output.slice(0, take);
+
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const shuffled = seededShuffle(filteredFallback, `${seedInput}:${dayKey}`);
+  const remaining = Math.max(0, take - output.length);
+
+  return [...output, ...shuffled.slice(0, remaining)];
 };
 
 const buildPublicOwnerFilter = () => ({
@@ -281,6 +363,44 @@ const buildVideoWhere = ({ q, tags, category, videoType = "all" }) => {
   return where;
 };
 
+const buildChannelSearchOrClauses = (q) => {
+  const query = normalizeText(q);
+  if (!query) return [];
+
+  const variants = new Set();
+  variants.add(query);
+
+  const withoutAt = query.replace(/^@+/, "").trim();
+  if (withoutAt) variants.add(withoutAt);
+
+  const compact = withoutAt.replace(/\s+/g, "");
+  if (compact) variants.add(compact);
+
+  const clauses = [];
+  for (const variant of variants) {
+    clauses.push(
+      { username: { contains: variant, mode: "insensitive" } },
+      { fullName: { contains: variant, mode: "insensitive" } }
+    );
+  }
+
+  clauses.push({ channelDescription: { contains: query, mode: "insensitive" } });
+
+  return clauses;
+};
+
+const buildChannelTokenAndClauses = (q) => {
+  const terms = getQueryTerms(q).filter((term) => term.length >= 2);
+  if (terms.length <= 1) return [];
+
+  return terms.map((term) => ({
+    OR: [
+      { username: { contains: term, mode: "insensitive" } },
+      { fullName: { contains: term, mode: "insensitive" } },
+    ],
+  }));
+};
+
 const buildChannelWhere = ({ q, category }) => {
   const where = {
     ...buildPublicOwnerFilter(),
@@ -288,11 +408,12 @@ const buildChannelWhere = ({ q, category }) => {
   };
 
   if (q) {
-    where.OR.push(
-      { username: { contains: q, mode: "insensitive" } },
-      { fullName: { contains: q, mode: "insensitive" } },
-      { channelDescription: { contains: q, mode: "insensitive" } }
-    );
+    where.OR.push(...buildChannelSearchOrClauses(q));
+
+    const tokenAndClauses = buildChannelTokenAndClauses(q);
+    if (tokenAndClauses.length > 0) {
+      where.AND = [...(Array.isArray(where.AND) ? where.AND : []), ...tokenAndClauses];
+    }
   }
 
   if (category) {
@@ -564,6 +685,9 @@ const findVideos = async ({
   videoType = "all",
 }) => {
   const where = buildVideoWhere({ q, tags, category, videoType });
+  const fallbackBaseWhere = normalizeText(q)
+    ? buildVideoWhere({ q: "", tags, category, videoType })
+    : null;
   const orderBy = resolveVideoOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -595,9 +719,12 @@ const findVideos = async ({
     },
   };
 
+  let items = [];
+  let totalItems = 0;
+
   if (useRelevance) {
     const relevanceTake = resolveRelevanceCandidateTake({ skip, take });
-    const [candidates, totalItems] = await Promise.all([
+    const [candidates, total] = await Promise.all([
       prisma.video.findMany({
         where,
         orderBy,
@@ -613,32 +740,56 @@ const findVideos = async ({
       scorer: (item) => scoreVideoRelevance(item, q),
     });
     const pageItems = ranked.slice(skip, skip + take);
+    items = pageItems.map(toVideoItem);
+    totalItems = total;
+  } else {
+    const [rows, total] = await Promise.all([
+      prisma.video.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        select,
+      }),
+      prisma.video.count({ where }),
+    ]);
 
-    return {
-      items: pageItems.map(toVideoItem),
-      totalItems,
-    };
+    items = rows.map(toVideoItem);
+    totalItems = total;
   }
 
-  const [items, totalItems] = await Promise.all([
-    prisma.video.findMany({
-      where,
-      orderBy,
-      skip,
-      take,
+  if (fallbackBaseWhere && items.length < take) {
+    const remaining = take - items.length;
+    const fallbackTotal = await prisma.video.count({ where: fallbackBaseWhere });
+    const fallbackRows = await prisma.video.findMany({
+      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
+      orderBy: [{ createdAt: "desc" }],
+      skip: resolveBackfillSkip({
+        skip,
+        primaryTotal: totalItems,
+        fallbackTotal,
+      }),
+      take: resolveBackfillPoolTake(remaining),
       select,
-    }),
-    prisma.video.count({ where }),
-  ]);
+    });
 
-  return {
-    items: items.map(toVideoItem),
-    totalItems,
-  };
+    items = fillWithRandomBackfill({
+      primaryItems: items,
+      fallbackItems: fallbackRows.map(toVideoItem),
+      take,
+      seedInput: `search:videos:${videoType}:${normalizeSearch(q)}:${skip}:${take}`,
+    });
+    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
+  }
+
+  return { items, totalItems };
 };
 
 const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildChannelWhere({ q, category });
+  const fallbackBaseWhere = normalizeText(q)
+    ? buildChannelWhere({ q: "", category })
+    : null;
   const orderBy = resolveChannelOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -668,9 +819,12 @@ const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType
     },
   };
 
+  let items = [];
+  let totalItems = 0;
+
   if (useRelevance) {
     const relevanceTake = resolveRelevanceCandidateTake({ skip, take });
-    const [candidates, totalItems] = await Promise.all([
+    const [candidates, total] = await Promise.all([
       prisma.user.findMany({
         where,
         orderBy,
@@ -686,32 +840,54 @@ const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType
       scorer: (item) => scoreChannelRelevance(item, q),
     });
     const pageItems = ranked.slice(skip, skip + take);
+    items = pageItems.map(toChannelItem);
+    totalItems = total;
+  } else {
+    const [rows, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        select,
+      }),
+      prisma.user.count({ where }),
+    ]);
 
-    return {
-      items: pageItems.map(toChannelItem),
-      totalItems,
-    };
+    items = rows.map(toChannelItem);
+    totalItems = total;
   }
 
-  const [items, totalItems] = await Promise.all([
-    prisma.user.findMany({
-      where,
-      orderBy,
-      skip,
-      take,
+  if (fallbackBaseWhere && items.length < take) {
+    const remaining = take - items.length;
+    const fallbackTotal = await prisma.user.count({ where: fallbackBaseWhere });
+    const fallbackRows = await prisma.user.findMany({
+      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
+      orderBy: [{ createdAt: "desc" }],
+      skip: resolveBackfillSkip({
+        skip,
+        primaryTotal: totalItems,
+        fallbackTotal,
+      }),
+      take: resolveBackfillPoolTake(remaining),
       select,
-    }),
-    prisma.user.count({ where }),
-  ]);
+    });
 
-  return {
-    items: items.map(toChannelItem),
-    totalItems,
-  };
+    items = fillWithRandomBackfill({
+      primaryItems: items,
+      fallbackItems: fallbackRows.map(toChannelItem),
+      take,
+      seedInput: `search:channels:${normalizeSearch(q)}:${skip}:${take}`,
+    });
+    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
+  }
+
+  return { items, totalItems };
 };
 
 const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildTweetWhere({ q });
+  const fallbackBaseWhere = normalizeText(q) ? buildTweetWhere({ q: "" }) : null;
   const orderBy = resolveTweetOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -736,9 +912,12 @@ const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
     },
   };
 
+  let items = [];
+  let totalItems = 0;
+
   if (useRelevance) {
     const relevanceTake = resolveRelevanceCandidateTake({ skip, take });
-    const [candidates, totalItems] = await Promise.all([
+    const [candidates, total] = await Promise.all([
       prisma.tweet.findMany({
         where,
         orderBy,
@@ -754,32 +933,54 @@ const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
       scorer: (item) => scoreTweetRelevance(item, q),
     });
     const pageItems = ranked.slice(skip, skip + take);
+    items = pageItems.map(toTweetItem);
+    totalItems = total;
+  } else {
+    const [rows, total] = await Promise.all([
+      prisma.tweet.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        select,
+      }),
+      prisma.tweet.count({ where }),
+    ]);
 
-    return {
-      items: pageItems.map(toTweetItem),
-      totalItems,
-    };
+    items = rows.map(toTweetItem);
+    totalItems = total;
   }
 
-  const [items, totalItems] = await Promise.all([
-    prisma.tweet.findMany({
-      where,
-      orderBy,
-      skip,
-      take,
+  if (fallbackBaseWhere && items.length < take) {
+    const remaining = take - items.length;
+    const fallbackTotal = await prisma.tweet.count({ where: fallbackBaseWhere });
+    const fallbackRows = await prisma.tweet.findMany({
+      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
+      orderBy: [{ createdAt: "desc" }],
+      skip: resolveBackfillSkip({
+        skip,
+        primaryTotal: totalItems,
+        fallbackTotal,
+      }),
+      take: resolveBackfillPoolTake(remaining),
       select,
-    }),
-    prisma.tweet.count({ where }),
-  ]);
+    });
 
-  return {
-    items: items.map(toTweetItem),
-    totalItems,
-  };
+    items = fillWithRandomBackfill({
+      primaryItems: items,
+      fallbackItems: fallbackRows.map(toTweetItem),
+      take,
+      seedInput: `search:tweets:${normalizeSearch(q)}:${skip}:${take}`,
+    });
+    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
+  }
+
+  return { items, totalItems };
 };
 
 const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildPlaylistWhere({ q });
+  const fallbackBaseWhere = normalizeText(q) ? buildPlaylistWhere({ q: "" }) : null;
   const orderBy = resolvePlaylistOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -801,9 +1002,12 @@ const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
     },
   };
 
+  let items = [];
+  let totalItems = 0;
+
   if (useRelevance) {
     const relevanceTake = resolveRelevanceCandidateTake({ skip, take });
-    const [candidates, totalItems] = await Promise.all([
+    const [candidates, total] = await Promise.all([
       prisma.playlist.findMany({
         where,
         orderBy,
@@ -819,28 +1023,49 @@ const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
       scorer: (item) => scorePlaylistRelevance(item, q),
     });
     const pageItems = ranked.slice(skip, skip + take);
+    items = pageItems.map(toPlaylistItem);
+    totalItems = total;
+  } else {
+    const [rows, total] = await Promise.all([
+      prisma.playlist.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+        select,
+      }),
+      prisma.playlist.count({ where }),
+    ]);
 
-    return {
-      items: pageItems.map(toPlaylistItem),
-      totalItems,
-    };
+    items = rows.map(toPlaylistItem);
+    totalItems = total;
   }
 
-  const [items, totalItems] = await Promise.all([
-    prisma.playlist.findMany({
-      where,
-      orderBy,
-      skip,
-      take,
+  if (fallbackBaseWhere && items.length < take) {
+    const remaining = take - items.length;
+    const fallbackTotal = await prisma.playlist.count({ where: fallbackBaseWhere });
+    const fallbackRows = await prisma.playlist.findMany({
+      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
+      orderBy: [{ updatedAt: "desc" }],
+      skip: resolveBackfillSkip({
+        skip,
+        primaryTotal: totalItems,
+        fallbackTotal,
+      }),
+      take: resolveBackfillPoolTake(remaining),
       select,
-    }),
-    prisma.playlist.count({ where }),
-  ]);
+    });
 
-  return {
-    items: items.map(toPlaylistItem),
-    totalItems,
-  };
+    items = fillWithRandomBackfill({
+      primaryItems: items,
+      fallbackItems: fallbackRows.map(toPlaylistItem),
+      take,
+      seedInput: `search:playlists:${normalizeSearch(q)}:${skip}:${take}`,
+    });
+    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
+  }
+
+  return { items, totalItems };
 };
 
 const saveSearchHistory = async ({ userId, query }) => {
@@ -859,7 +1084,7 @@ const saveSearchHistory = async ({ userId, query }) => {
 
 export const searchPublic = asyncHandler(async (req, res) => {
   const userId = req.user?.id || null;
-  const q = normalizeText(req.query?.q || "");
+  const q = normalizeText(req.query?.q || req.query?.query || req.query?.search || "");
   const tags = parseCsv(req.query?.tags).map((entry) => entry.toLowerCase());
   const category = normalizeText(req.query?.category || req.query?.channelCategory || "");
   const scope = resolveScope(req.query?.scope || req.query?.type);

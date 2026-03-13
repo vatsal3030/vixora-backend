@@ -18,6 +18,144 @@ const NOTIFICATION_TYPES = new Set([
 const ALLOWED_SORT_FIELDS = ["createdAt", "type", "isRead"];
 
 const normalizeText = (value) => String(value ?? "").trim();
+const isPlainObject = (value) =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const uniqueNonEmpty = (values) => {
+  const output = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const normalized = normalizeText(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+};
+
+const createTarget = ({ type, id = null, url = null, fallbackUrls = [] }) => {
+  const normalizedType = normalizeText(type).toUpperCase() || "SYSTEM";
+  const normalizedId = normalizeText(id) || null;
+  const allUrls = uniqueNonEmpty([url, ...fallbackUrls]);
+  const primaryUrl = allUrls[0] || null;
+
+  return {
+    type: normalizedType,
+    id: normalizedId,
+    url: primaryUrl,
+    fallbackUrls: allUrls.slice(1),
+    isClickable: Boolean(primaryUrl),
+  };
+};
+
+const normalizeTargetObject = (value) => {
+  if (!isPlainObject(value)) return null;
+
+  const type = normalizeText(value.type || value.targetType).toUpperCase() || null;
+  const id = normalizeText(value.id || value.targetId) || null;
+  const urls = uniqueNonEmpty([
+    value.url,
+    value.targetUrl,
+    ...(Array.isArray(value.fallbackUrls) ? value.fallbackUrls : []),
+  ]);
+
+  if (!type && !id && urls.length === 0) return null;
+
+  return createTarget({
+    type: type || "SYSTEM",
+    id,
+    url: urls[0] || null,
+    fallbackUrls: urls.slice(1),
+  });
+};
+
+const buildFallbackTarget = (notification, data) => {
+  const targetType = normalizeText(data?.targetType).toUpperCase();
+  const activityType = normalizeText(data?.activityType).toUpperCase();
+  const videoId = normalizeText(notification.video?.id || notification.videoId || data?.videoId);
+  const tweetId = normalizeText(data?.tweetId || data?.postId);
+  const playlistId = normalizeText(data?.playlistId);
+  const commentId = normalizeText(data?.commentId);
+  const channelId = normalizeText(data?.channelId || notification.senderId || notification.sender?.id);
+
+  if (targetType === "TWEET" && tweetId) {
+    return createTarget({ type: "TWEET", id: tweetId, url: `/tweets/${tweetId}` });
+  }
+
+  if (targetType === "PLAYLIST" && playlistId) {
+    return createTarget({
+      type: "PLAYLIST",
+      id: playlistId,
+      url: `/playlists/${playlistId}`,
+    });
+  }
+
+  if (targetType === "CHANNEL" && channelId) {
+    return createTarget({
+      type: "CHANNEL",
+      id: channelId,
+      url: `/channels/${channelId}`,
+      fallbackUrls: [`/channel/${channelId}`],
+    });
+  }
+
+  if (commentId && videoId) {
+    return createTarget({
+      type: "COMMENT",
+      id: commentId,
+      url: `/watch/${videoId}?comment=${commentId}`,
+      fallbackUrls: [`/watch/${videoId}`],
+    });
+  }
+
+  if (activityType === "SHORT_PUBLISHED" && videoId) {
+    return createTarget({
+      type: "SHORT",
+      id: videoId,
+      url: `/watch/${videoId}`,
+      fallbackUrls: [`/videos/${videoId}`],
+    });
+  }
+
+  if (videoId) {
+    return createTarget({
+      type: targetType === "SHORT" ? "SHORT" : "VIDEO",
+      id: videoId,
+      url: `/watch/${videoId}`,
+      fallbackUrls: [`/videos/${videoId}`],
+    });
+  }
+
+  if (tweetId) {
+    return createTarget({ type: "TWEET", id: tweetId, url: `/tweets/${tweetId}` });
+  }
+
+  if (channelId) {
+    return createTarget({
+      type: "CHANNEL",
+      id: channelId,
+      url: `/channels/${channelId}`,
+      fallbackUrls: [`/channel/${channelId}`],
+    });
+  }
+
+  return createTarget({ type: targetType || notification.type || "SYSTEM" });
+};
+
+const resolveNotificationTarget = (notification) => {
+  const data = isPlainObject(notification?.data) ? notification.data : {};
+  const targetFromDataObject = normalizeTargetObject(data?.target);
+  if (targetFromDataObject) return targetFromDataObject;
+
+  const targetFromFlatData = normalizeTargetObject({
+    targetType: data?.targetType,
+    targetId: data?.targetId,
+    targetUrl: data?.targetUrl,
+  });
+  if (targetFromFlatData) return targetFromFlatData;
+
+  return buildFallbackTarget(notification, data);
+};
 
 const normalizeBoolean = (value) => {
   const raw = normalizeText(value).toLowerCase();
@@ -115,42 +253,68 @@ const buildNotificationFilter = ({ userId, query, forceUnread = false }) => {
   };
 };
 
-const formatNotification = (notification) => ({
-  id: notification.id,
-  isRead: notification.isRead,
-  createdAt: notification.createdAt,
-  message: notification.message,
-  title: notification.title,
-  type: notification.type,
-  data: notification.data ?? null,
-  sender: notification.sender
+const formatNotification = (notification) => {
+  const target = resolveNotificationTarget(notification);
+  const baseData = isPlainObject(notification.data) ? notification.data : null;
+  const data = baseData
     ? {
-        id: notification.sender.id,
-        fullName: notification.sender.fullName,
-        username: notification.sender.username,
-        avatar: notification.sender.avatar,
+        ...baseData,
+        target: baseData.target ?? target,
+        targetType: baseData.targetType ?? target.type ?? null,
+        targetId: baseData.targetId ?? target.id ?? null,
+        targetUrl: baseData.targetUrl ?? target.url ?? null,
       }
-    : null,
-  video: notification.video
-    ? {
-        id: notification.video.id,
-        title: notification.video.title,
-        thumbnail: notification.video.thumbnail,
-        duration: notification.video.duration,
-        views: notification.video.views,
-        isPublished: notification.video.isPublished,
-        uploadedAt: notification.video.createdAt,
-        channel: notification.video.owner
-          ? {
-              id: notification.video.owner.id,
-              fullName: notification.video.owner.fullName,
-              username: notification.video.owner.username,
-              avatar: notification.video.owner.avatar,
-            }
-          : null,
-      }
-    : null,
-});
+    : target?.isClickable
+      ? {
+          target,
+          targetType: target.type ?? null,
+          targetId: target.id ?? null,
+          targetUrl: target.url ?? null,
+        }
+      : null;
+
+  return {
+    id: notification.id,
+    isRead: notification.isRead,
+    createdAt: notification.createdAt,
+    message: notification.message,
+    title: notification.title,
+    type: notification.type,
+    data,
+    target,
+    targetType: target.type ?? null,
+    targetId: target.id ?? null,
+    targetUrl: target.url ?? null,
+    isClickable: Boolean(target.isClickable),
+    sender: notification.sender
+      ? {
+          id: notification.sender.id,
+          fullName: notification.sender.fullName,
+          username: notification.sender.username,
+          avatar: notification.sender.avatar,
+        }
+      : null,
+    video: notification.video
+      ? {
+          id: notification.video.id,
+          title: notification.video.title,
+          thumbnail: notification.video.thumbnail,
+          duration: notification.video.duration,
+          views: notification.video.views,
+          isPublished: notification.video.isPublished,
+          uploadedAt: notification.video.createdAt,
+          channel: notification.video.owner
+            ? {
+                id: notification.video.owner.id,
+                fullName: notification.video.owner.fullName,
+                username: notification.video.owner.username,
+                avatar: notification.video.owner.avatar,
+              }
+            : null,
+        }
+      : null,
+  };
+};
 
 const listNotifications = async ({
   userId,

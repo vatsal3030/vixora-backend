@@ -24,10 +24,17 @@ const MAX_INTERESTED_TAG_IDS = 100;
 const MAX_SUPPRESSION_ROWS = 1000;
 const MAX_TAG_DISCOVERY_VIDEOS = 500;
 const MAX_TAG_SIGNAL_ROWS = 300;
-const TAGS_DEFAULT_LIMIT = 20;
-const TAGS_MAX_LIMIT = 50;
-const TAG_FEED_DEFAULT_LIMIT = 12;
-const TAG_FEED_MAX_LIMIT = 50;
+const TAGS_DEFAULT_LIMIT = 30;
+const TAGS_MAX_LIMIT = 100;
+const TAG_FEED_DEFAULT_LIMIT = 20;
+const TAG_FEED_MAX_LIMIT = 100;
+const HOME_FEED_DEFAULT_LIMIT = 20;
+const SUBSCRIPTIONS_FEED_DEFAULT_LIMIT = 20;
+const TRENDING_FEED_DEFAULT_LIMIT = 30;
+const SHORTS_FEED_DEFAULT_LIMIT = 30;
+const FEED_PAGINATION_MAX_LIMIT = 100;
+const FEED_BACKFILL_POOL_MULTIPLIER = 6;
+const FEED_BACKFILL_MIN_POOL_SIZE = 24;
 const MAX_TAG_NAME_LENGTH = 30;
 const MAX_SEED_TOPICS = 25;
 const FALLBACK_FEED_TAG_TOPICS = Object.freeze([
@@ -91,7 +98,7 @@ const TRENDING_CACHE_TTL_SECONDS = 45;
 const TAGS_CACHE_TTL_SECONDS = 30;
 const TAG_FEED_CACHE_TTL_SECONDS = 20;
 const MAX_CACHEABLE_PAGE = 3;
-const MAX_CACHEABLE_LIMIT = 20;
+const MAX_CACHEABLE_LIMIT = 40;
 
 const isCacheableWindow = (page, limit) =>
     Number.isFinite(page) &&
@@ -241,6 +248,76 @@ const seededShuffle = (items, seedInput) => {
     }
 
     return arr;
+};
+
+const resolveBackfillPoolTake = (needed) =>
+    Math.max((Number(needed) || 0) * FEED_BACKFILL_POOL_MULTIPLIER, FEED_BACKFILL_MIN_POOL_SIZE);
+
+const resolveBackfillSkip = ({ skip = 0, primaryTotal = 0, fallbackTotal = 0 }) => {
+    const adjusted = Math.max(0, Number(skip || 0) - Math.max(0, Number(primaryTotal || 0)));
+    const total = Math.max(0, Number(fallbackTotal || 0));
+    if (total <= 0) return 0;
+    return adjusted >= total ? adjusted % total : adjusted;
+};
+
+const appendRandomVideoBackfill = async ({
+    currentVideos = [],
+    take = 0,
+    skip = 0,
+    primaryTotal = 0,
+    whereClause = {},
+    orderBy = [{ createdAt: "desc" }],
+    seedKey = "feed",
+    select = FEED_VIDEO_SELECT,
+}) => {
+    const safeCurrent = Array.isArray(currentVideos) ? [...currentVideos] : [];
+    if (safeCurrent.length >= take) {
+        return {
+            videos: safeCurrent.slice(0, take),
+            usedBackfill: false,
+            backfillCount: 0,
+            fallbackTotal: 0,
+        };
+    }
+
+    const excludedIds = safeCurrent.map((row) => row?.id).filter(Boolean);
+    const backfillWhere = addNotInVideoIds(whereClause, excludedIds);
+    const fallbackTotal = await prisma.video.count({ where: backfillWhere });
+    if (fallbackTotal <= 0) {
+        return {
+            videos: safeCurrent,
+            usedBackfill: false,
+            backfillCount: 0,
+            fallbackTotal: 0,
+        };
+    }
+
+    const remaining = Math.max(0, take - safeCurrent.length);
+    const poolTake = Math.min(resolveBackfillPoolTake(remaining), fallbackTotal);
+    const fallbackSkip = resolveBackfillSkip({
+        skip,
+        primaryTotal,
+        fallbackTotal,
+    });
+
+    const fallbackPool = await prisma.video.findMany({
+        where: backfillWhere,
+        orderBy,
+        skip: fallbackSkip,
+        take: poolTake,
+        select,
+    });
+
+    const dayKey = new Date().toISOString().slice(0, 10);
+    const shuffledBackfill = seededShuffle(fallbackPool, `${seedKey}:${dayKey}`);
+    const appended = shuffledBackfill.slice(0, remaining);
+
+    return {
+        videos: [...safeCurrent, ...appended],
+        usedBackfill: appended.length > 0,
+        backfillCount: appended.length,
+        fallbackTotal,
+    };
 };
 
 const getSuppressionFilterForUser = async (userId) => {
@@ -829,6 +906,9 @@ export const getTagFeed = asyncHandler(async (req, res) => {
 
     let personalizationBoost = 0;
     let rankedVideos = enrichedVideos;
+    let usedBackfill = false;
+    let backfillCount = 0;
+    let totalItems = totalVideos;
     if (personalizationEnabled && safeSortBy !== "createdAt" && userId) {
         const interestMap = await buildUserTagInterestMap({ userId, suppression });
         const normalizedInterest = Math.max(-5, Math.min(5, Number(interestMap.get(resolvedTag.id) || 0)));
@@ -858,11 +938,28 @@ export const getTagFeed = asyncHandler(async (req, res) => {
             });
     }
 
+    if (rankedVideos.length < safeLimit) {
+        const backfill = await appendRandomVideoBackfill({
+            currentVideos: rankedVideos,
+            take: safeLimit,
+            skip,
+            primaryTotal: totalVideos,
+            whereClause: buildBaseFeedVideoWhere(suppression.whereExtra),
+            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
+            seedKey: `feed:tag:${resolvedTag.id}:${userId || "anon"}:${safePage}:${safeLimit}`,
+        });
+
+        rankedVideos = backfill.videos;
+        usedBackfill = backfill.usedBackfill;
+        backfillCount = backfill.backfillCount;
+        totalItems = Math.max(totalVideos, backfill.fallbackTotal, skip + rankedVideos.length);
+    }
+
     const responseData = buildPaginatedListData({
         items: rankedVideos,
         currentPage: safePage,
         limit: safeLimit,
-        totalItems: totalVideos,
+        totalItems,
         extra: {
             tag: {
                 id: resolvedTag.id,
@@ -876,6 +973,8 @@ export const getTagFeed = asyncHandler(async (req, res) => {
                 personalizationBoost,
                 blockedChannels: suppression.blockedChannelIds.length,
                 hiddenVideos: suppression.notInterestedVideoIds.length,
+                usedBackfill,
+                backfillCount,
             },
         },
     });
@@ -903,7 +1002,7 @@ export const getTagFeed = asyncHandler(async (req, res) => {
 export const getHomeFeed = asyncHandler(async (req, res) => {
     let {
         page = "1",
-        limit = "10",
+        limit = String(HOME_FEED_DEFAULT_LIMIT),
         tag = "",
         sortBy = "createdAt",
         sortType = "desc"
@@ -915,7 +1014,11 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     // -------------------------------
     // Pagination validation
     // -------------------------------
-    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        FEED_PAGINATION_MAX_LIMIT
+    );
 
     // -------------------------------
     // Sorting validation
@@ -1112,6 +1215,20 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
         }
     }
 
+    if (videos.length < safeLimit) {
+        const backfill = await appendRandomVideoBackfill({
+            currentVideos: videos,
+            take: safeLimit,
+            skip,
+            primaryTotal: personalizedCount,
+            whereClause,
+            orderBy: fallbackOrderBy,
+            seedKey: `feed:home:final:${userId || "anon"}:${safePage}:${safeLimit}:${selectedTag || "all"}`,
+        });
+        videos = backfill.videos;
+        usedBackfill = usedBackfill || backfill.usedBackfill;
+    }
+
 
     // -------------------------------
     // Attach watch progress
@@ -1126,12 +1243,13 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     const totalVideos = await prisma.video.count({
         where: whereClause
     });
+    const totalVideosForPagination = Math.max(totalVideos, skip + videosWithProgress.length);
 
     const responseData = buildPaginatedListData({
         items: videosWithProgress,
         currentPage: safePage,
         limit: safeLimit,
-        totalItems: totalVideos,
+        totalItems: totalVideosForPagination,
         extra: {
             filters: {
                 sortBy,
@@ -1174,13 +1292,16 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
 
     let {
         page = "1",
-        limit = "10",
+        limit = String(SUBSCRIPTIONS_FEED_DEFAULT_LIMIT),
         isShort = "false"
     } = req.query;
 
-    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        FEED_PAGINATION_MAX_LIMIT
+    );
 
-    // Convert isShort safely
     const isShortFilter = parseBooleanQuery(isShort);
 
     const shouldUseCache = isCacheableWindow(safePage, safeLimit);
@@ -1201,7 +1322,6 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         }
     }
 
-    // 1️⃣ Get subscribed channels
     const suppression = await getSuppressionFilterForUser(userId);
 
     const subscriptions = await prisma.subscription.findMany({
@@ -1219,61 +1339,67 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         select: { channelId: true }
     });
 
-    if (!subscriptions.length) {
-        const emptyData = buildPaginatedListData({
-            items: [],
-            currentPage: safePage,
-            limit: safeLimit,
-            totalItems: 0,
-            extra: {
-                filters: {
-                    isShort: isShortFilter ?? null
-                }
-            }
-        });
+    const channelIds = subscriptions.map((s) => s.channelId);
+    const hasSubscriptions = channelIds.length > 0;
 
-        if (cacheParams) {
-            await setCachedValue({
-                scope: "feed:subscriptions",
-                params: cacheParams,
-                value: { data: emptyData, message: "No subscriptions found" },
-                ttlSeconds: SUBSCRIPTIONS_CACHE_TTL_SECONDS,
-            });
-        }
+    const subscriptionsWhere = hasSubscriptions
+        ? buildBaseFeedVideoWhere({
+            ownerId: { in: channelIds },
+            ...suppression.whereExtra,
+            ...(isShortFilter !== undefined && { isShort: isShortFilter })
+        })
+        : null;
 
-        return res.status(200).json(
-            new ApiResponse(200, emptyData, "No subscriptions found")
-        );
+    const exploreWhere = buildBaseFeedVideoWhere({
+        ...suppression.whereExtra,
+        ...(isShortFilter !== undefined && { isShort: isShortFilter }),
+    });
+
+    let videos = [];
+    let subscribedTotal = 0;
+
+    if (subscriptionsWhere) {
+        const [rows, count] = await Promise.all([
+            prisma.video.findMany({
+                where: subscriptionsWhere,
+                orderBy: { createdAt: "desc" },
+                skip,
+                take: safeLimit,
+                select: FEED_VIDEO_SELECT
+            }),
+            prisma.video.count({
+                where: subscriptionsWhere
+            }),
+        ]);
+
+        videos = rows;
+        subscribedTotal = count;
     }
 
-    const channelIds = subscriptions.map(s => s.channelId);
+    let usedBackfill = false;
+    let backfillCount = 0;
+    let totalVideos = subscribedTotal;
 
-    // 2️⃣ Build video filter
-    const videoWhere = buildBaseFeedVideoWhere({
-        ownerId: { in: channelIds },
-        ...suppression.whereExtra,
-        ...(isShortFilter !== undefined && { isShort: isShortFilter })
-    });
+    if (videos.length < safeLimit) {
+        const backfill = await appendRandomVideoBackfill({
+            currentVideos: videos,
+            take: safeLimit,
+            skip,
+            primaryTotal: subscribedTotal,
+            whereClause: exploreWhere,
+            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
+            seedKey: `feed:subscriptions:${userId}:${safePage}:${safeLimit}:${isShortFilter ?? "all"}`,
+        });
 
+        videos = backfill.videos;
+        usedBackfill = backfill.usedBackfill;
+        backfillCount = backfill.backfillCount;
+        totalVideos = Math.max(subscribedTotal, backfill.fallbackTotal, skip + videos.length);
+    }
 
-    // 3️⃣ Fetch videos
-    const videos = await prisma.video.findMany({
-        where: videoWhere,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: safeLimit,
-        select: FEED_VIDEO_SELECT
-    });
-
-    // 4️⃣ Attach watch progress
     const videosWithProgress = flattenVideoTopicsList(
         await attachWatchProgress(videos, userId)
     );
-
-    // 5️⃣ Total count
-    const totalVideos = await prisma.video.count({
-        where: videoWhere
-    });
 
     const responseData = buildPaginatedListData({
         items: videosWithProgress,
@@ -1285,11 +1411,18 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
                 isShort: isShortFilter ?? null,
                 blockedChannels: suppression.blockedChannelIds.length,
                 hiddenVideos: suppression.notInterestedVideoIds.length,
+                subscribedChannels: channelIds.length,
+                subscribedMatches: subscribedTotal,
+                usedBackfill,
+                backfillCount,
             }
         }
     });
 
-    const responseMessage = "Subscription feed fetched successfully";
+    const responseMessage =
+        hasSubscriptions || videosWithProgress.length > 0
+            ? "Subscription feed fetched successfully"
+            : "No videos available";
 
     if (cacheParams) {
         await setCachedValue({
@@ -1311,7 +1444,7 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
 export const getTrendingFeed = asyncHandler(async (req, res) => {
     let {
         page = "1",
-        limit = "20",
+        limit = String(TRENDING_FEED_DEFAULT_LIMIT),
         isShort = "false",
         sortBy = "views",
         sortType = "desc"
@@ -1320,7 +1453,11 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     // --------------------------
     // Pagination
     // --------------------------
-    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        FEED_PAGINATION_MAX_LIMIT
+    );
 
     // --------------------------
     // Boolean conversion
@@ -1374,7 +1511,7 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     // --------------------------
     // Fetch videos
     // --------------------------
-    const videos = await prisma.video.findMany({
+    let videos = await prisma.video.findMany({
         where: whereClause,
         orderBy:
             sortBy === "createdAt"
@@ -1388,9 +1525,28 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
     // --------------------------
     // Total count
     // --------------------------
-    const totalVideos = await prisma.video.count({
+    let totalVideos = await prisma.video.count({
         where: whereClause
     });
+
+    let usedBackfill = false;
+    let backfillCount = 0;
+    if (videos.length < safeLimit) {
+        const backfill = await appendRandomVideoBackfill({
+            currentVideos: videos,
+            take: safeLimit,
+            skip,
+            primaryTotal: totalVideos,
+            whereClause,
+            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
+            seedKey: `feed:trending:${safePage}:${safeLimit}:${isShortFilter ?? "all"}:${sortBy}:${sortType}`,
+        });
+
+        videos = backfill.videos;
+        usedBackfill = backfill.usedBackfill;
+        backfillCount = backfill.backfillCount;
+        totalVideos = Math.max(totalVideos, backfill.fallbackTotal, skip + videos.length);
+    }
 
     const responseData = buildPaginatedListData({
         items: flattenVideoTopicsList(
@@ -1406,6 +1562,8 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
                 sortType,
                 blockedChannels: suppression.blockedChannelIds.length,
                 hiddenVideos: suppression.notInterestedVideoIds.length,
+                usedBackfill,
+                backfillCount,
             }
         }
     });
@@ -1433,7 +1591,7 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
 export const getShortsFeed = asyncHandler(async (req, res) => {
     let {
         page = "1",
-        limit = "20",
+        limit = String(SHORTS_FEED_DEFAULT_LIMIT),
         sortBy = "createdAt",
         sortType = "desc",
         includeComments = "true",
@@ -1443,7 +1601,11 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
     const userId = req.user?.id || null;
 
     // Pagination safety
-    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(
+        page,
+        limit,
+        FEED_PAGINATION_MAX_LIMIT
+    );
     const safeSort = sanitizeSort(
         sortBy,
         sortType,
@@ -1462,77 +1624,69 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
 
     const suppression = await getSuppressionFilterForUser(userId);
 
-    // Fetch shorts
-    const shorts = await prisma.video.findMany({
-        where: buildBaseFeedVideoWhere({
-            ...suppression.whereExtra,
-            isShort: true,
+    const shortsWhere = buildBaseFeedVideoWhere({
+        ...suppression.whereExtra,
+        isShort: true,
+    });
+    const shortsSelect = {
+        id: true,
+        title: true,
+        description: true,
+        thumbnail: true,
+        videoFile: true,
+        playbackUrl: true,
+        duration: true,
+        views: true,
+        createdAt: true,
+        owner: {
+            select: {
+                id: true,
+                fullName: true,
+                username: true,
+                avatar: true
+            }
+        },
+        tags: {
+            select: {
+                tag: {
+                    select: {
+                        id: true,
+                        name: true,
+                    },
+                },
+            },
+        },
+        categories: {
+            select: {
+                category: {
+                    select: {
+                        id: true,
+                        name: true,
+                        slug: true,
+                        icon: true,
+                    },
+                },
+            },
+        },
+        _count: {
+            select: {
+                likes: true,
+                comments: true
+            }
+        },
+        ...(userId && {
+            likes: {
+                where: { likedById: userId },
+                select: { id: true }
+            }
         }),
-        orderBy:
-            sortBy === "createdAt"
-                ? { createdAt: sortType }
-                : [{ [sortBy]: sortType }, { createdAt: "desc" }],
-        skip,
-        take: safeLimit,
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            thumbnail: true,
-            videoFile: true,
-            playbackUrl: true,
-            duration: true,
-            views: true,
-            createdAt: true,
-            owner: {
-                select: {
-                    id: true,
-                    fullName: true,
-                    username: true,
-                    avatar: true
-                }
-            },
-            tags: {
-                select: {
-                    tag: {
-                        select: {
-                            id: true,
-                            name: true,
-                        },
-                    },
-                },
-            },
-            categories: {
-                select: {
-                    category: {
-                        select: {
-                            id: true,
-                            name: true,
-                            slug: true,
-                            icon: true,
-                        },
-                    },
-                },
-            },
-            _count: {
-                select: {
-                    likes: true,
-                    comments: true
-                }
-            },
-            ...(userId && {
-                likes: {
-                    where: { likedById: userId },
-                    select: { id: true }
-                }
-            }),
-            ...(includeCommentsFlag && {
-                comments: {
+        ...(includeCommentsFlag && {
+            comments: {
                 where: {
                     isDeleted: false
                 },
                 take: safeCommentsLimit,
-                orderBy: { createdAt: 'desc' },
+                orderBy: { createdAt: "desc" },
                 select: {
                     id: true,
                     content: true,
@@ -1545,9 +1699,44 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                         }
                     }
                 }
-            }})
-        }
+            }
+        })
+    };
+
+    let shorts = await prisma.video.findMany({
+        where: shortsWhere,
+        orderBy:
+            sortBy === "createdAt"
+                ? { createdAt: sortType }
+                : [{ [sortBy]: sortType }, { createdAt: "desc" }],
+        skip,
+        take: safeLimit,
+        select: shortsSelect,
     });
+
+    let totalShorts = await prisma.video.count({
+        where: shortsWhere
+    });
+
+    let usedBackfill = false;
+    let backfillCount = 0;
+    if (shorts.length < safeLimit) {
+        const backfill = await appendRandomVideoBackfill({
+            currentVideos: shorts,
+            take: safeLimit,
+            skip,
+            primaryTotal: totalShorts,
+            whereClause: shortsWhere,
+            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
+            seedKey: `feed:shorts:${userId || "anon"}:${safePage}:${safeLimit}:${sortBy}:${sortType}`,
+            select: shortsSelect,
+        });
+
+        shorts = backfill.videos;
+        usedBackfill = backfill.usedBackfill;
+        backfillCount = backfill.backfillCount;
+        totalShorts = Math.max(totalShorts, backfill.fallbackTotal, skip + shorts.length);
+    }
 
     // Format shorts with interaction data
     const formattedShorts = shorts.map(short => ({
@@ -1566,14 +1755,6 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
         await attachWatchProgress(formattedShorts, userId)
     );
 
-    // Count for pagination
-    const totalShorts = await prisma.video.count({
-        where: buildBaseFeedVideoWhere({
-            ...suppression.whereExtra,
-            isShort: true
-        })
-    });
-
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -1590,6 +1771,8 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
                         commentsLimit: includeCommentsFlag ? safeCommentsLimit : 0,
                         blockedChannels: suppression.blockedChannelIds.length,
                         hiddenVideos: suppression.notInterestedVideoIds.length,
+                        usedBackfill,
+                        backfillCount,
                     }
                 }
             }),
@@ -1597,4 +1780,5 @@ export const getShortsFeed = asyncHandler(async (req, res) => {
         )
     );
 });
+
 

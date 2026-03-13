@@ -6,7 +6,7 @@ const toPositiveInt = (value, fallback) => {
 
 export const buildPaginationMeta = ({
   currentPage = 1,
-  limit = 10,
+  limit = 20,
   totalItems = 0,
 }) => {
   const safePage = toPositiveInt(currentPage, 1);
@@ -31,7 +31,7 @@ export const buildPaginatedListData = ({
   key = "items",
   items = [],
   currentPage = 1,
-  limit = 10,
+  limit = 20,
   totalItems = 0,
   legacyTotalKey,
   includeKeyAlias = false,

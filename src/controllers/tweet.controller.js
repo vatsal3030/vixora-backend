@@ -14,10 +14,12 @@ import {
 } from "../services/notification.service.js";
 
 const MAX_TWEET_CONTENT_LENGTH = 500;
-const MAX_FEED_LIMIT = 50;
-const DEFAULT_FEED_LIMIT = 20;
+const MAX_FEED_LIMIT = 100;
+const DEFAULT_FEED_LIMIT = 30;
 const FEED_CACHE_TTL_SECONDS = 20;
 const HOT_TOPICS_CACHE_TTL_SECONDS = 45;
+const FEED_BACKFILL_POOL_MULTIPLIER = 6;
+const FEED_BACKFILL_MIN_POOL_SIZE = 24;
 const DEFAULT_HOT_TOPICS_LIMIT = 12;
 const MAX_HOT_TOPICS_LIMIT = 30;
 const DEFAULT_TOPICS_WINDOW_HOURS = 72;
@@ -71,6 +73,45 @@ const parsePositiveInt = (value, fallback, max) => {
     if (!Number.isInteger(parsed) || parsed < 1) return fallback;
     if (Number.isInteger(max)) return Math.min(parsed, max);
     return parsed;
+};
+
+const toStableSeed = (input) => {
+    const raw = String(input || "");
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i += 1) {
+        hash ^= raw.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+};
+
+const seededShuffle = (items, seedInput) => {
+    const arr = Array.isArray(items) ? [...items] : [];
+    if (arr.length <= 1) return arr;
+
+    let seed = toStableSeed(seedInput) || 1;
+    const rand = () => {
+        seed = Math.imul(seed, 1664525) + 1013904223;
+        seed >>>= 0;
+        return seed / 4294967296;
+    };
+
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(rand() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+
+    return arr;
+};
+
+const resolveBackfillPoolTake = (needed) =>
+    Math.max((Number(needed) || 0) * FEED_BACKFILL_POOL_MULTIPLIER, FEED_BACKFILL_MIN_POOL_SIZE);
+
+const resolveBackfillSkip = ({ skip = 0, primaryTotal = 0, fallbackTotal = 0 }) => {
+    const adjusted = Math.max(0, Number(skip || 0) - Math.max(0, Number(primaryTotal || 0)));
+    const total = Math.max(0, Number(fallbackTotal || 0));
+    if (total <= 0) return 0;
+    return adjusted >= total ? adjusted % total : adjusted;
 };
 
 const resolveTweetFeedMode = (value, userId) => {
@@ -186,6 +227,81 @@ const TWEET_FEED_SELECT = {
             comments: true,
         },
     },
+};
+
+const normalizeNotClauses = (existingNot) => {
+    if (!existingNot) return [];
+    if (Array.isArray(existingNot)) return existingNot;
+    return [existingNot];
+};
+
+const addNotInTweetIds = (where, tweetIds = []) => {
+    const ids = [...new Set((tweetIds || []).filter(Boolean))];
+    if (ids.length === 0) return where;
+
+    const baseNot = normalizeNotClauses(where?.NOT);
+    return {
+        ...where,
+        NOT: [...baseNot, { id: { in: ids } }],
+    };
+};
+
+const appendRandomTweetBackfill = async ({
+    currentTweets = [],
+    limit = 0,
+    skip = 0,
+    primaryTotal = 0,
+    baseWhere = {},
+    orderBy = [{ createdAt: "desc" }],
+    seedKey = "tweets:feed",
+}) => {
+    const safeCurrent = Array.isArray(currentTweets) ? [...currentTweets] : [];
+    if (safeCurrent.length >= limit) {
+        return {
+            tweets: safeCurrent.slice(0, limit),
+            usedBackfill: false,
+            backfillCount: 0,
+            fallbackTotal: 0,
+        };
+    }
+
+    const backfillWhere = addNotInTweetIds(baseWhere, safeCurrent.map((tweet) => tweet?.id));
+    const fallbackTotal = await prisma.tweet.count({ where: backfillWhere });
+    if (fallbackTotal <= 0) {
+        return {
+            tweets: safeCurrent,
+            usedBackfill: false,
+            backfillCount: 0,
+            fallbackTotal: 0,
+        };
+    }
+
+    const remaining = Math.max(0, limit - safeCurrent.length);
+    const poolTake = Math.min(resolveBackfillPoolTake(remaining), fallbackTotal);
+    const fallbackSkip = resolveBackfillSkip({
+        skip,
+        primaryTotal,
+        fallbackTotal,
+    });
+
+    const backfillPool = await prisma.tweet.findMany({
+        where: backfillWhere,
+        orderBy,
+        skip: fallbackSkip,
+        take: poolTake,
+        select: TWEET_FEED_SELECT,
+    });
+
+    const dayKey = new Date().toISOString().slice(0, 10);
+    const shuffled = seededShuffle(backfillPool, `${seedKey}:${dayKey}`);
+    const appended = shuffled.slice(0, remaining);
+
+    return {
+        tweets: [...safeCurrent, ...appended],
+        usedBackfill: appended.length > 0,
+        backfillCount: appended.length,
+        fallbackTotal,
+    };
 };
 
 const formatTweetFeedItem = (tweet, likedTweetIds = null) => ({
@@ -379,6 +495,7 @@ export const createTweet = asyncHandler(async (req, res) => {
         extraData: {
             channelName,
             tweetId: tweet.id,
+            tweetPreview: content.slice(0, 160),
         },
     }).catch((error) => {
         console.error(
@@ -437,6 +554,8 @@ export const getTweetFeed = asyncHandler(async (req, res) => {
     let totalItems = 0;
     let ranking = "chronological";
     let followingChannelsCount = 0;
+    let usedBackfill = false;
+    let backfillCount = 0;
 
     if (mode === "following") {
         const followingRows = await prisma.subscription.findMany({
@@ -447,53 +566,34 @@ export const getTweetFeed = asyncHandler(async (req, res) => {
         const followingIds = followingRows.map((row) => row.channelId).filter(Boolean);
         followingChannelsCount = followingIds.length;
 
-        if (followingIds.length === 0) {
-            const emptyData = buildPaginatedListData({
-                items: [],
-                currentPage: page,
-                limit,
-                totalItems: 0,
-                extra: {
-                    mode,
-                    filters: {
-                        topic: topic || null,
-                    },
-                    ranking,
-                    followingChannelsCount: 0,
-                },
-            });
-
-            return res.status(200).json(
-                new ApiResponse(200, emptyData, "Tweet feed fetched successfully")
-            );
-        }
-
         const allowedFollowingIds = blockedChannelIds.length > 0
             ? followingIds.filter((id) => !blockedChannelIds.includes(id))
             : followingIds;
 
-        const where = {
-            ...baseWhere,
-            ownerId: {
-                in: allowedFollowingIds,
-            },
-        };
-
-        const [rows, count] = await Promise.all([
-            prisma.tweet.findMany({
-                where,
-                orderBy: {
-                    createdAt: sortType,
+        if (allowedFollowingIds.length > 0) {
+            const where = {
+                ...baseWhere,
+                ownerId: {
+                    in: allowedFollowingIds,
                 },
-                skip,
-                take: limit,
-                select: TWEET_FEED_SELECT,
-            }),
-            prisma.tweet.count({ where }),
-        ]);
+            };
 
-        tweets = rows;
-        totalItems = count;
+            const [rows, count] = await Promise.all([
+                prisma.tweet.findMany({
+                    where,
+                    orderBy: {
+                        createdAt: sortType,
+                    },
+                    skip,
+                    take: limit,
+                    select: TWEET_FEED_SELECT,
+                }),
+                prisma.tweet.count({ where }),
+            ]);
+
+            tweets = rows;
+            totalItems = count;
+        }
     } else if (mode === "latest") {
         const [rows, count] = await Promise.all([
             prisma.tweet.findMany({
@@ -551,78 +651,62 @@ export const getTweetFeed = asyncHandler(async (req, res) => {
             tweets = rows;
             totalItems = count;
             ranking = "personalized-fallback";
-            const likedTweetIds = await enrichWithLikedState(tweets, userId);
-            const formattedTweets = tweets.map((tweet) =>
-                formatTweetFeedItem(tweet, likedTweetIds)
+            followingChannelsCount = 0;
+        } else {
+            const profile = await buildUserInterestProfile(userId);
+            const candidateTake = Math.min(
+                DEFAULT_FOR_YOU_CANDIDATE_SIZE + skip + limit * 3,
+                500
             );
 
-            const responseData = buildPaginatedListData({
-                items: formattedTweets,
-                currentPage: page,
-                limit,
-                totalItems,
-                extra: {
-                    mode,
-                    filters: {
-                        topic: topic || null,
-                    },
-                    ranking,
-                    followingChannelsCount: 0,
-                    blockedChannels: blockedChannelIds.length,
-                },
-            });
+            const [candidateRows, count] = await Promise.all([
+                prisma.tweet.findMany({
+                    where: baseWhere,
+                    orderBy: [
+                        { createdAt: "desc" },
+                        { likes: { _count: "desc" } },
+                    ],
+                    take: candidateTake,
+                    select: TWEET_FEED_SELECT,
+                }),
+                prisma.tweet.count({ where: baseWhere }),
+            ]);
 
-            const responseMessage = "Tweet feed fetched successfully";
-            if (cacheParams) {
-                await setCachedValue({
-                    scope: "tweets:feed",
-                    params: cacheParams,
-                    value: {
-                        data: responseData,
-                        message: responseMessage,
-                    },
-                    ttlSeconds: FEED_CACHE_TTL_SECONDS,
-                });
+            const ranked = candidateRows
+                .map((tweet) => ({
+                    tweet,
+                    score: scoreForYouTweet(tweet, profile),
+                }))
+                .sort((a, b) => b.score - a.score)
+                .map((entry) => entry.tweet);
+
+            tweets = ranked.slice(skip, skip + limit);
+            if (sortType === "asc") {
+                tweets.reverse();
             }
-
-            return res.status(200).json(
-                new ApiResponse(200, responseData, responseMessage)
-            );
+            totalItems = count;
+            followingChannelsCount = profile.followingSet.size;
         }
+    }
 
-        const profile = await buildUserInterestProfile(userId);
-        const candidateTake = Math.min(
-            DEFAULT_FOR_YOU_CANDIDATE_SIZE + skip + limit * 3,
-            500
-        );
+    if (tweets.length < limit) {
+        const backfill = await appendRandomTweetBackfill({
+            currentTweets: tweets,
+            limit,
+            skip,
+            primaryTotal: totalItems,
+            baseWhere,
+            orderBy: [{ createdAt: "desc" }],
+            seedKey: `tweets:feed:${mode}:${userId || "anon"}:${page}:${limit}:${topic || "all"}:${sortType}`,
+        });
 
-        const [candidateRows, count] = await Promise.all([
-            prisma.tweet.findMany({
-                where: baseWhere,
-                orderBy: [
-                    { createdAt: "desc" },
-                    { likes: { _count: "desc" } },
-                ],
-                take: candidateTake,
-                select: TWEET_FEED_SELECT,
-            }),
-            prisma.tweet.count({ where: baseWhere }),
-        ]);
-
-        const ranked = candidateRows
-            .map((tweet) => ({
-                tweet,
-                score: scoreForYouTweet(tweet, profile),
-            }))
-            .sort((a, b) => b.score - a.score)
-            .map((entry) => entry.tweet);
-
-        tweets = ranked.slice(skip, skip + limit);
-        if (sortType === "asc") {
-            tweets.reverse();
+        tweets = backfill.tweets;
+        usedBackfill = backfill.usedBackfill;
+        backfillCount = backfill.backfillCount;
+        totalItems = Math.max(totalItems, backfill.fallbackTotal, skip + tweets.length);
+        if (usedBackfill) {
+            ranking = `${ranking}+backfill`;
         }
-        totalItems = count;
-        followingChannelsCount = profile.followingSet.size;
     }
 
     const likedTweetIds = await enrichWithLikedState(tweets, userId);
@@ -643,6 +727,8 @@ export const getTweetFeed = asyncHandler(async (req, res) => {
             ranking,
             followingChannelsCount,
             blockedChannels: blockedChannelIds.length,
+            usedBackfill,
+            backfillCount,
         },
     });
 
