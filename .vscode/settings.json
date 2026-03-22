@@ -1,0 +1,7 @@
+{
+  "inlineChat.affordance": "off",
+  "inlineChat.lineEmptyHint": false,
+  "inlineChat.lineNaturalLanguageHint": false,
+  "chat.disableAIFeatures": true,
+  "window.commandCenter": true
+}
