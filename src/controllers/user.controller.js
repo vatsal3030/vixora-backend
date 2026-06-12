@@ -1947,3 +1947,65 @@ export const restoreAccountConfirm = asyncHandler(async (req, res) => {
             )
         );
 })
+
+export const updateDefaultAvatar = asyncHandler(async (req, res) => {
+    const { type } = req.body;
+    if (!type) {
+        throw new ApiError(400, "Avatar type is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { username: true, avatarPublicId: true }
+    });
+
+    if (user.avatarPublicId) {
+        await deleteImageOnCloudinary(user.avatarPublicId);
+    }
+
+    const avatarUrl = `https://api.dicebear.com/7.x/${type}/svg?seed=${user.username}`;
+
+    const updatedUser = await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+            avatar: avatarUrl,
+            avatarPublicId: null
+        },
+        select: userSafeSelect
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, updatedUser, "Default avatar updated successfully")
+    );
+});
+
+export const updateDefaultCoverImage = asyncHandler(async (req, res) => {
+    const { type } = req.body;
+    if (!type) {
+        throw new ApiError(400, "Cover image type is required");
+    }
+
+    const user = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { username: true, coverImagePublicId: true }
+    });
+
+    if (user.coverImagePublicId) {
+        await deleteImageOnCloudinary(user.coverImagePublicId);
+    }
+
+    const coverUrl = `https://api.dicebear.com/7.x/${type}/svg?seed=${user.username}cover&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf`;
+
+    const updatedUser = await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+            coverImage: coverUrl,
+            coverImagePublicId: null
+        },
+        select: userSafeSelect
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, updatedUser, "Default cover image updated successfully")
+    );
+});

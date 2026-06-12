@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import cookieParser from "cookie-parser";
 import { apiLimiter } from "./middlewares/rateLimit.middleware.js";
 import { globalErrorHandler } from "./middlewares/error.middleware.js";
@@ -39,6 +40,7 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 /* ---------- GLOBAL MIDDLEWARE ---------- */
+app.use(compression());
 app.use(helmet());
 
 const allowedOrigins = parseAllowedOrigins(process.env.CORS_ORIGIN, [

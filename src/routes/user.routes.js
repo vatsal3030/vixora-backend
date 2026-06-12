@@ -24,7 +24,9 @@ import {
     cancelEmailChange,
     getAccountSwitchToken,
     switchAccount,
-    resolveAccountSwitchTokens
+    resolveAccountSwitchTokens,
+    updateDefaultAvatar,
+    updateDefaultCoverImage
 } from "../controllers/user.controller.js";
 import { verifyJwt } from "../middlewares/auth.middleware.js";
 import { authLimiter, otpLimiter } from "../middlewares/rateLimit.middleware.js";
@@ -43,6 +45,7 @@ router.route("/account-switch-token").get(verifyJwt, getAccountSwitchToken)
 router.route("/switch-account").post(verifyJwt, switchAccount)
 router.route("/switch-account/resolve").post(verifyJwt, resolveAccountSwitchTokens)
 
+
 router.route("/forgot-password").post(otpLimiter, forgotPasswordRequest)
 router.route("/forgot-password/verify").post(otpLimiter, forgotPasswordVerify)
 router.route("/reset-password").post(authLimiter, resetPassword)
@@ -50,8 +53,10 @@ router.route("/reset-password").post(authLimiter, resetPassword)
 router.route("/change-password").post(verifyJwt, changeCurrentPassword)
 
 router.route("/update-account").patch(verifyJwt, updateAccountDetails)
-router.patch("/update-avatar", verifyJwt, updateUserAvatar);
-router.patch("/update-coverImage", verifyJwt, updateUserCoverImage);
+router.route("/update-avatar").patch(verifyJwt, updateUserAvatar)
+router.route("/update-default-avatar").patch(verifyJwt, updateDefaultAvatar)
+router.route("/update-default-cover-image").patch(verifyJwt, updateDefaultCoverImage)
+router.route("/update-coverImage").patch(verifyJwt, updateUserCoverImage)
 router.route("/update-description").patch(verifyJwt, updateChannelDescription)
 
 router.route("/u/:username").get(verifyJwt, getUserChannelProfile)

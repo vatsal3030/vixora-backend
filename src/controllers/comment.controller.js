@@ -88,6 +88,7 @@ export const getVideoComments = asyncHandler(async (req, res) => {
         where: {
             videoId,
             isDeleted: false,
+            parentId: null,
         },
         orderBy: {
             createdAt: sortType,
@@ -110,25 +111,54 @@ export const getVideoComments = asyncHandler(async (req, res) => {
             _count: {
                 select: {
                     likes: true,
+                    replies: true,
                 }
             },
             likes: userId ? {
                 where: { likedById: userId },
                 select: { id: true }
             } : false,
+            replies: {
+                where: { isDeleted: false },
+                orderBy: { createdAt: "asc" },
+                select: {
+                    id: true,
+                    content: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    ownerId: true,
+                    owner: {
+                        select: {
+                            id: true,
+                            username: true,
+                            avatar: true,
+                        }
+                    },
+                    _count: { select: { likes: true } },
+                    likes: userId ? { where: { likedById: userId }, select: { id: true } } : false,
+                }
+            }
         }
     });
 
     const totalComments = await prisma.comment.count({
-        where: { videoId, isDeleted: false }
+        where: { videoId, isDeleted: false, parentId: null }
     });
 
     const formattedComments = comments.map((comment) => ({
         ...comment,
         likesCount: comment._count.likes,
+        repliesCount: comment._count.replies,
         isLiked: userId ? comment.likes.length > 0 : false,
         _count: undefined,
         likes: undefined,
+        replies: comment.replies.map(reply => ({
+            ...reply,
+            likesCount: reply._count.likes,
+            isLiked: userId ? reply.likes.length > 0 : false,
+            _count: undefined,
+            likes: undefined,
+        }))
     }));
 
     return res.status(200).json(
@@ -197,11 +227,13 @@ export const addComment = asyncHandler(async (req, res) => {
             content,
             ownerId: userId,
             videoId: videoId,
+            parentId: req.body?.parentId || null,
         },
         select: {
             id: true,
             content: true,
             createdAt: true,
+            parentId: true,
             owner: {
                 select: {
                     id: true,

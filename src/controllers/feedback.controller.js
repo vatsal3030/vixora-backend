@@ -5,12 +5,14 @@ import asyncHandler from "../utils/asyncHandler.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
 
-const REPORT_TARGET_TYPES = new Set(["VIDEO", "COMMENT", "USER", "CHANNEL"]);
+const REPORT_TARGET_TYPES = new Set(["VIDEO", "COMMENT", "USER", "CHANNEL", "TWEET", "PLAYLIST"]);
 const REPORT_EVENT_ENTITY_MAP = Object.freeze({
   VIDEO: "VIDEO",
   COMMENT: "COMMENT",
   USER: "USER",
   CHANNEL: "CHANNEL",
+  TWEET: "TWEET",
+  PLAYLIST: "PLAYLIST",
 });
 const MAX_REPORT_REASON_LENGTH = 120;
 const MAX_REPORT_DESCRIPTION_LENGTH = 2000;
@@ -40,6 +42,20 @@ const validateReportTarget = async ({ targetType, targetId }) => {
         select: { id: true, isDeleted: true },
       });
       return Boolean(row && !row.isDeleted);
+    }
+    case "TWEET": {
+      const row = await prisma.tweet.findUnique({
+        where: { id: targetId },
+        select: { id: true, isDeleted: true },
+      });
+      return Boolean(row && !row.isDeleted);
+    }
+    case "PLAYLIST": {
+      const row = await prisma.playlist.findUnique({
+        where: { id: targetId },
+        select: { id: true },
+      });
+      return Boolean(row);
     }
     default:
       return false;

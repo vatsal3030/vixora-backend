@@ -360,6 +360,9 @@ model Comment {
   tweetId   String?
   deletedAt DateTime?
   isDeleted Boolean   @default(false)
+  parentId  String?
+  parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   Comment[] @relation("CommentReplies")
   owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   tweet     Tweet?    @relation(fields: [tweetId], references: [id])
   video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
@@ -369,6 +372,7 @@ model Comment {
   @@index([ownerId])
   @@index([updatedAt])
   @@index([createdAt])
+  @@index([parentId])
 }
 
 model Like {
@@ -750,6 +754,8 @@ enum ReportTargetType {
   COMMENT
   USER
   CHANNEL
+  TWEET
+  PLAYLIST
 }
 
 enum ReportStatus {
