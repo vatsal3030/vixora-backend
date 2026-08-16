@@ -4,6 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
+import { invalidateCacheByScope } from "../utils/cache.js";
 // import upd from "../utils/updateFeedScrore.js"
 
 // 1. Get videoId from params
@@ -82,9 +83,7 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
     if (
         !video ||
         !video.isPublished ||
-        video.isDeleted ||
-        video.processingStatus !== "COMPLETED" ||
-        !video.isHlsReady
+        video.isDeleted
     ) {
         throw new ApiError(404, "Video not found");
     }
@@ -105,6 +104,7 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
             }
         })
         refreshVideoScoreInBackground(videoId);
+        void invalidateCacheByScope("video");
         return res.status(200).json(
             new ApiResponse(200, { status: "unliked" }, "Video unliked")
         );
@@ -119,6 +119,7 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
     })
 
     refreshVideoScoreInBackground(videoId);
+    void invalidateCacheByScope("video");
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Video liked")
@@ -215,6 +216,7 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
         await prisma.like.delete({
             where: { id: existingLike.id },
         });
+        void invalidateCacheByScope("tweets");
 
         return res.status(200).json(
             new ApiResponse(200, { status: "unliked" }, "Tweet unliked")
@@ -227,6 +229,7 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
             tweetId: tweetId,
         },
     });
+    void invalidateCacheByScope("tweets");
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Tweet liked")
@@ -260,8 +263,6 @@ export const getLikedVideos = asyncHandler(async (req, res) => {
                 is: {
                     isPublished: true,
                     isDeleted: false,
-                    processingStatus: "COMPLETED",
-                    isHlsReady: true,
                 }
             }
         },
@@ -308,8 +309,6 @@ export const getLikedVideos = asyncHandler(async (req, res) => {
                 is: {
                     isPublished: true,
                     isDeleted: false,
-                    processingStatus: "COMPLETED",
-                    isHlsReady: true,
                 }
             }
         },

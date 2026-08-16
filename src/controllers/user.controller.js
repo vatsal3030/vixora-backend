@@ -66,13 +66,14 @@ const buildSafeUserForAuthResponse = (user) => ({
     username: user.username,
     avatar: user.avatar,
     coverImage: user.coverImage,
+    role: user.role || 'USER',
+    moderationStatus: user.moderationStatus || 'APPROVED',
     createdAt: user.createdAt,
 });
 
 const buildAccountSwitchPayload = ({ user, refreshToken }) => ({
     accountSwitchToken: createAccountSwitchToken({
         userId: user.id,
-        refreshToken,
     }),
     account: {
         id: user.id,
@@ -80,6 +81,7 @@ const buildAccountSwitchPayload = ({ user, refreshToken }) => ({
         email: user.email,
         username: user.username,
         avatar: user.avatar,
+        role: user.role || 'USER',
     }
 });
 
@@ -661,6 +663,8 @@ export const loginUser = asyncHandler(async (req, res) => {
             username: true,
             avatar: true,
             coverImage: true,
+            role: true,
+            moderationStatus: true,
             createdAt: true,
         },
     });
@@ -1094,10 +1098,11 @@ export const getAccountSwitchToken = asyncHandler(async (req, res) => {
             username: true,
             avatar: true,
             coverImage: true,
+            role: true,
+            moderationStatus: true,
             createdAt: true,
             isDeleted: true,
             emailVerified: true,
-            refreshToken: true,
         },
     });
 
@@ -1109,14 +1114,9 @@ export const getAccountSwitchToken = asyncHandler(async (req, res) => {
         throw new ApiError(403, "Email not verified");
     }
 
-    if (!user.refreshToken) {
-        throw new ApiError(401, "Session expired. Login again.");
-    }
-
     const safeUser = buildSafeUserForAuthResponse(user);
     const accountSwitch = buildAccountSwitchPayload({
         user: safeUser,
-        refreshToken: user.refreshToken,
     });
 
     return res.status(200).json(
@@ -1134,7 +1134,7 @@ export const switchAccount = asyncHandler(async (req, res) => {
     try {
         decodedToken = verifyAccountSwitchToken(rawToken);
     } catch {
-        throw new ApiError(401, "Invalid account switch token");
+        throw new ApiError(401, "Invalid or expired account switch token");
     }
 
     const targetUserId = String(decodedToken?.uid || "").trim();
@@ -1151,10 +1151,11 @@ export const switchAccount = asyncHandler(async (req, res) => {
             username: true,
             avatar: true,
             coverImage: true,
+            role: true,
+            moderationStatus: true,
             createdAt: true,
             isDeleted: true,
             emailVerified: true,
-            refreshToken: true,
         },
     });
 
@@ -1164,19 +1165,6 @@ export const switchAccount = asyncHandler(async (req, res) => {
 
     if (!targetUser.emailVerified) {
         throw new ApiError(403, "Target account email is not verified");
-    }
-
-    if (!targetUser.refreshToken) {
-        throw new ApiError(401, "Target account session expired. Login that account again.");
-    }
-
-    const matches = isAccountSwitchTokenValidForRefreshToken({
-        tokenPayload: decodedToken,
-        refreshToken: targetUser.refreshToken,
-    });
-
-    if (!matches) {
-        throw new ApiError(401, "Account switch token expired");
     }
 
     const { accessToken, refreshToken } = await generateAccessAndRefreshToken(targetUser.id);

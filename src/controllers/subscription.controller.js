@@ -4,6 +4,7 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
+import { invalidateCacheByScope } from "../utils/cache.js";
 
 const NOTIFICATION_LEVELS = new Set(["ALL", "PERSONALIZED", "NONE"]);
 
@@ -86,6 +87,8 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
 
         // Keep feed score aligned when subscription affinity is removed.
         void updateChannelVideoScores(channelId).catch(() => null);
+        void invalidateCacheByScope("channel");
+        void invalidateCacheByScope("feed");
 
         const subscriberCount = await prisma.subscription.count({
             where: { channelId },
@@ -109,6 +112,8 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
 
     // Run score refresh in background to avoid blocking subscription response latency.
     void updateChannelVideoScores(channelId).catch(() => null);
+    void invalidateCacheByScope("channel");
+    void invalidateCacheByScope("feed");
 
     const subscriberCount = await prisma.subscription.count({
         where: { channelId },

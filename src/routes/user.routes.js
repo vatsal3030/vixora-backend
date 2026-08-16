@@ -28,7 +28,7 @@ import {
     updateDefaultAvatar,
     updateDefaultCoverImage
 } from "../controllers/user.controller.js";
-import { verifyJwt } from "../middlewares/auth.middleware.js";
+import { verifyJwt, optionalJwt } from "../middlewares/auth.middleware.js";
 import { authLimiter, otpLimiter } from "../middlewares/rateLimit.middleware.js";
 const router = Router();
 
@@ -42,8 +42,8 @@ router.route("/refresh-token").post(authLimiter, refreshAccessToken);
 
 router.route("/current-user").get(verifyJwt, getCurrentUser)
 router.route("/account-switch-token").get(verifyJwt, getAccountSwitchToken)
-router.route("/switch-account").post(verifyJwt, switchAccount)
-router.route("/switch-account/resolve").post(verifyJwt, resolveAccountSwitchTokens)
+router.route("/switch-account").post(optionalJwt, switchAccount)
+router.route("/switch-account/resolve").post(optionalJwt, resolveAccountSwitchTokens)
 
 
 router.route("/forgot-password").post(otpLimiter, forgotPasswordRequest)

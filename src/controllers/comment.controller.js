@@ -77,9 +77,7 @@ export const getVideoComments = asyncHandler(async (req, res) => {
     if (
         !video ||
         !video.isPublished ||
-        video.isDeleted ||
-        video.processingStatus !== "COMPLETED" ||
-        !video.isHlsReady
+        video.isDeleted
     ) {
         throw new ApiError(404, "Video not found");
     }
@@ -177,6 +175,92 @@ export const getVideoComments = asyncHandler(async (req, res) => {
     );
 });
 
+// ✅ Get replies for a specific comment (supports deep nesting on demand)
+export const getCommentReplies = asyncHandler(async (req, res) => {
+    const { commentId } = req.params;
+    if (!commentId) {
+        throw new ApiError(400, "Comment ID is required");
+    }
+
+    const userId = req.user?.id || null;
+    const { page, limit } = sanitizePagination(req.query, { defaultLimit: 20 });
+    const safePage = page;
+    const safeLimit = limit;
+    const skip = (safePage - 1) * safeLimit;
+
+    // Verify the parent comment exists
+    const parentComment = await prisma.comment.findUnique({
+        where: { id: commentId },
+        select: { id: true, isDeleted: true }
+    });
+
+    if (!parentComment) {
+        throw new ApiError(404, "Comment not found");
+    }
+
+    const replies = await prisma.comment.findMany({
+        where: {
+            parentId: commentId,
+            isDeleted: false,
+        },
+        orderBy: { createdAt: "asc" },
+        skip,
+        take: safeLimit,
+        select: {
+            id: true,
+            content: true,
+            createdAt: true,
+            updatedAt: true,
+            ownerId: true,
+            parentId: true,
+            owner: {
+                select: {
+                    id: true,
+                    username: true,
+                    avatar: true,
+                }
+            },
+            _count: {
+                select: {
+                    likes: true,
+                    replies: true,
+                }
+            },
+            likes: userId ? {
+                where: { likedById: userId },
+                select: { id: true }
+            } : false,
+        }
+    });
+
+    const totalReplies = await prisma.comment.count({
+        where: { parentId: commentId, isDeleted: false }
+    });
+
+    const formattedReplies = replies.map((reply) => ({
+        ...reply,
+        likesCount: reply._count.likes,
+        repliesCount: reply._count.replies,
+        isLiked: userId ? reply.likes.length > 0 : false,
+        _count: undefined,
+        likes: undefined,
+    }));
+
+    return res.status(200).json(
+        new ApiResponse(
+            200,
+            buildPaginatedListData({
+                key: "replies",
+                items: formattedReplies,
+                currentPage: safePage,
+                limit: safeLimit,
+                totalItems: totalReplies,
+            }),
+            "Replies fetched successfully"
+        )
+    );
+});
+
 export const addComment = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
 
@@ -214,9 +298,7 @@ export const addComment = asyncHandler(async (req, res) => {
     if (
         !video ||
         !video.isPublished ||
-        video.isDeleted ||
-        video.processingStatus !== "COMPLETED" ||
-        !video.isHlsReady
+        video.isDeleted
     ) {
         throw new ApiError(404, "Video not found");
     }

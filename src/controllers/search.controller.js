@@ -283,12 +283,10 @@ const toPlaylistItem = (playlist) => ({
   owner: playlist.owner || null,
 });
 
-const buildVideoWhere = ({ q, tags, category, videoType = "all" }) => {
+const buildVideoWhere = ({ q, tags = [], category, videoType = "all" }) => {
   const where = {
     isPublished: true,
     isDeleted: false,
-    processingStatus: "COMPLETED",
-    isHlsReady: true,
     owner: {
       is: buildPublicOwnerFilter(),
     },
@@ -300,49 +298,39 @@ const buildVideoWhere = ({ q, tags, category, videoType = "all" }) => {
     where.isShort = true;
   }
 
-  if (q) {
+  const rawQ = String(q || "").trim();
+  const cleanQ = rawQ.replace(/^[#@]+/, "").trim();
+
+  if (rawQ) {
+    const terms = Array.from(new Set([rawQ, cleanQ].filter(Boolean)));
     where.OR = [
-      { title: { contains: q, mode: "insensitive" } },
-      { description: { contains: q, mode: "insensitive" } },
-      { owner: { is: { username: { contains: q, mode: "insensitive" } } } },
-      { owner: { is: { fullName: { contains: q, mode: "insensitive" } } } },
+      { title: { contains: cleanQ || rawQ, mode: "insensitive" } },
+      { description: { contains: cleanQ || rawQ, mode: "insensitive" } },
+      { owner: { is: { username: { contains: cleanQ || rawQ, mode: "insensitive" } } } },
+      { owner: { is: { fullName: { contains: cleanQ || rawQ, mode: "insensitive" } } } },
       {
         tags: {
           some: {
-            tag: { name: { contains: q, mode: "insensitive" } },
+            tag: {
+              OR: terms.map((term) => ({
+                name: { contains: term, mode: "insensitive" },
+              })),
+            },
           },
         },
       },
     ];
   }
 
-  if (tags.length > 0) {
+  const normalizedTags = (tags || []).map((t) => String(t).replace(/^[#@]+/, "").trim()).filter(Boolean);
+  if (normalizedTags.length > 0) {
     where.tags = {
       some: {
-        OR: tags.map((tagName) => ({
+        OR: normalizedTags.map((tagName) => ({
           tag: {
-            name: { equals: tagName, mode: "insensitive" },
+            name: { contains: tagName, mode: "insensitive" },
           },
         })),
-      },
-    };
-  }
-
-  if (tags.length > 0 && q) {
-    where.tags = {
-      some: {
-        OR: [
-          ...tags.map((tagName) => ({
-            tag: {
-              name: { equals: tagName, mode: "insensitive" },
-            },
-          })),
-          {
-            tag: {
-              name: { contains: q, mode: "insensitive" },
-            },
-          },
-        ],
       },
     };
   }
@@ -758,38 +746,11 @@ const findVideos = async ({
     totalItems = total;
   }
 
-  if (fallbackBaseWhere && items.length < take) {
-    const remaining = take - items.length;
-    const fallbackTotal = await prisma.video.count({ where: fallbackBaseWhere });
-    const fallbackRows = await prisma.video.findMany({
-      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
-      orderBy: [{ createdAt: "desc" }],
-      skip: resolveBackfillSkip({
-        skip,
-        primaryTotal: totalItems,
-        fallbackTotal,
-      }),
-      take: resolveBackfillPoolTake(remaining),
-      select,
-    });
-
-    items = fillWithRandomBackfill({
-      primaryItems: items,
-      fallbackItems: fallbackRows.map(toVideoItem),
-      take,
-      seedInput: `search:videos:${videoType}:${normalizeSearch(q)}:${skip}:${take}`,
-    });
-    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
-  }
-
   return { items, totalItems };
 };
 
 const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildChannelWhere({ q, category });
-  const fallbackBaseWhere = normalizeText(q)
-    ? buildChannelWhere({ q: "", category })
-    : null;
   const orderBy = resolveChannelOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -858,36 +819,11 @@ const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType
     totalItems = total;
   }
 
-  if (fallbackBaseWhere && items.length < take) {
-    const remaining = take - items.length;
-    const fallbackTotal = await prisma.user.count({ where: fallbackBaseWhere });
-    const fallbackRows = await prisma.user.findMany({
-      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
-      orderBy: [{ createdAt: "desc" }],
-      skip: resolveBackfillSkip({
-        skip,
-        primaryTotal: totalItems,
-        fallbackTotal,
-      }),
-      take: resolveBackfillPoolTake(remaining),
-      select,
-    });
-
-    items = fillWithRandomBackfill({
-      primaryItems: items,
-      fallbackItems: fallbackRows.map(toChannelItem),
-      take,
-      seedInput: `search:channels:${normalizeSearch(q)}:${skip}:${take}`,
-    });
-    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
-  }
-
   return { items, totalItems };
 };
 
 const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildTweetWhere({ q });
-  const fallbackBaseWhere = normalizeText(q) ? buildTweetWhere({ q: "" }) : null;
   const orderBy = resolveTweetOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -951,36 +887,11 @@ const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
     totalItems = total;
   }
 
-  if (fallbackBaseWhere && items.length < take) {
-    const remaining = take - items.length;
-    const fallbackTotal = await prisma.tweet.count({ where: fallbackBaseWhere });
-    const fallbackRows = await prisma.tweet.findMany({
-      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
-      orderBy: [{ createdAt: "desc" }],
-      skip: resolveBackfillSkip({
-        skip,
-        primaryTotal: totalItems,
-        fallbackTotal,
-      }),
-      take: resolveBackfillPoolTake(remaining),
-      select,
-    });
-
-    items = fillWithRandomBackfill({
-      primaryItems: items,
-      fallbackItems: fallbackRows.map(toTweetItem),
-      take,
-      seedInput: `search:tweets:${normalizeSearch(q)}:${skip}:${take}`,
-    });
-    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
-  }
-
   return { items, totalItems };
 };
 
 const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   const where = buildPlaylistWhere({ q });
-  const fallbackBaseWhere = normalizeText(q) ? buildPlaylistWhere({ q: "" }) : null;
   const orderBy = resolvePlaylistOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
 
@@ -1039,30 +950,6 @@ const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
 
     items = rows.map(toPlaylistItem);
     totalItems = total;
-  }
-
-  if (fallbackBaseWhere && items.length < take) {
-    const remaining = take - items.length;
-    const fallbackTotal = await prisma.playlist.count({ where: fallbackBaseWhere });
-    const fallbackRows = await prisma.playlist.findMany({
-      where: addNotInIds(fallbackBaseWhere, items.map((item) => item.id)),
-      orderBy: [{ updatedAt: "desc" }],
-      skip: resolveBackfillSkip({
-        skip,
-        primaryTotal: totalItems,
-        fallbackTotal,
-      }),
-      take: resolveBackfillPoolTake(remaining),
-      select,
-    });
-
-    items = fillWithRandomBackfill({
-      primaryItems: items,
-      fallbackItems: fallbackRows.map(toPlaylistItem),
-      take,
-      seedInput: `search:playlists:${normalizeSearch(q)}:${skip}:${take}`,
-    });
-    totalItems = Math.max(totalItems, fallbackTotal, skip + items.length);
   }
 
   return { items, totalItems };

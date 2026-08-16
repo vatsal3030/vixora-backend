@@ -229,3 +229,37 @@ export const setCachedValue = async ({
     // Ignore cache write errors. API response should not fail because cache failed.
   }
 };
+
+/**
+ * Invalidate cache by scope prefix across L1 memory and Redis.
+ */
+export const invalidateCacheByScope = async (scopePrefix) => {
+  if (!scopePrefix) return;
+
+  // Clear L1 memory cache
+  for (const key of l1Cache.keys()) {
+    if (key.includes(`:${scopePrefix}`) || key.startsWith(`${CACHE_NAMESPACE}:${scopePrefix}`)) {
+      l1Cache.delete(key);
+    }
+  }
+
+  // Clear Redis if enabled
+  if (isRedisCacheEnabled) {
+    const redis = getRedisConnection();
+    if (redis) {
+      try {
+        const pattern = `${CACHE_NAMESPACE}:${scopePrefix}*`;
+        const stream = redis.scanStream({ match: pattern, count: 100 });
+        stream.on("data", (keys = []) => {
+          if (keys.length > 0) {
+            const pipeline = redis.pipeline();
+            keys.forEach((k) => pipeline.del(k));
+            pipeline.exec().catch(() => {});
+          }
+        });
+      } catch {
+        // Ignore cache invalidation error
+      }
+    }
+  }
+};

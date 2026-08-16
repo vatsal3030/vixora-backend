@@ -938,28 +938,11 @@ export const getTagFeed = asyncHandler(async (req, res) => {
             });
     }
 
-    if (rankedVideos.length < safeLimit) {
-        const backfill = await appendRandomVideoBackfill({
-            currentVideos: rankedVideos,
-            take: safeLimit,
-            skip,
-            primaryTotal: totalVideos,
-            whereClause: buildBaseFeedVideoWhere(suppression.whereExtra),
-            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
-            seedKey: `feed:tag:${resolvedTag.id}:${userId || "anon"}:${safePage}:${safeLimit}`,
-        });
-
-        rankedVideos = backfill.videos;
-        usedBackfill = backfill.usedBackfill;
-        backfillCount = backfill.backfillCount;
-        totalItems = Math.max(totalVideos, backfill.fallbackTotal, skip + rankedVideos.length);
-    }
-
     const responseData = buildPaginatedListData({
         items: rankedVideos,
         currentPage: safePage,
         limit: safeLimit,
-        totalItems,
+        totalItems: totalVideos,
         extra: {
             tag: {
                 id: resolvedTag.id,
@@ -1243,7 +1226,10 @@ export const getHomeFeed = asyncHandler(async (req, res) => {
     const totalVideos = await prisma.video.count({
         where: whereClause
     });
-    const totalVideosForPagination = Math.max(totalVideos, skip + videosWithProgress.length);
+    // Ensure infinite scrolling loops by artificially bumping totalItems if we returned videos
+    const totalVideosForPagination = videosWithProgress.length > 0 
+        ? Math.max(totalVideos, skip + videosWithProgress.length + 1) 
+        : totalVideos;
 
     const responseData = buildPaginatedListData({
         items: videosWithProgress,
@@ -1376,27 +1362,6 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         subscribedTotal = count;
     }
 
-    let usedBackfill = false;
-    let backfillCount = 0;
-    let totalVideos = subscribedTotal;
-
-    if (videos.length < safeLimit) {
-        const backfill = await appendRandomVideoBackfill({
-            currentVideos: videos,
-            take: safeLimit,
-            skip,
-            primaryTotal: subscribedTotal,
-            whereClause: exploreWhere,
-            orderBy: [{ popularityScore: "desc" }, { createdAt: "desc" }],
-            seedKey: `feed:subscriptions:${userId}:${safePage}:${safeLimit}:${isShortFilter ?? "all"}`,
-        });
-
-        videos = backfill.videos;
-        usedBackfill = backfill.usedBackfill;
-        backfillCount = backfill.backfillCount;
-        totalVideos = Math.max(subscribedTotal, backfill.fallbackTotal, skip + videos.length);
-    }
-
     const videosWithProgress = flattenVideoTopicsList(
         await attachWatchProgress(videos, userId)
     );
@@ -1405,7 +1370,7 @@ export const getSubscriptionsFeed = asyncHandler(async (req, res) => {
         items: videosWithProgress,
         currentPage: safePage,
         limit: safeLimit,
-        totalItems: totalVideos,
+        totalItems: subscribedTotal,
         extra: {
             filters: {
                 isShort: isShortFilter ?? null,
@@ -1545,7 +1510,7 @@ export const getTrendingFeed = asyncHandler(async (req, res) => {
         videos = backfill.videos;
         usedBackfill = backfill.usedBackfill;
         backfillCount = backfill.backfillCount;
-        totalVideos = Math.max(totalVideos, backfill.fallbackTotal, skip + videos.length);
+        totalVideos = videos.length > 0 ? Math.max(totalVideos, backfill.fallbackTotal, skip + videos.length + 1) : totalVideos;
     }
 
     const responseData = buildPaginatedListData({

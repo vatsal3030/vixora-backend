@@ -37,17 +37,16 @@
 //   }
 // };
 
-import SibApiV3Sdk from "sib-api-v3-sdk";
+import { BrevoClient } from "@getbrevo/brevo";
 import ApiError from "./ApiError.js";
 
 export const sendEmail = async ({ to, subject, html }) => {
   try {
-    const client = SibApiV3Sdk.ApiClient.instance;
-    client.authentications["api-key"].apiKey = process.env.BREVO_API_KEY;
+    const brevo = new BrevoClient({
+      apiKey: process.env.BREVO_API_KEY,
+    });
 
-    const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
-
-    await apiInstance.sendTransacEmail({
+    await brevo.transactionalEmails.sendTransacEmail({
       sender: {
         email: "vatsalvadgamatest0@gmail.com",
         name: "Vixora",
@@ -62,4 +61,4 @@ export const sendEmail = async ({ to, subject, html }) => {
     console.error("Brevo API Error:", error);
     throw new ApiError(500, "Failed to send email");
   }
-};
+};

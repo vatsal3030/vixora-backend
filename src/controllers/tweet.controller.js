@@ -7,7 +7,7 @@ import { verifyCloudinaryAssetOwnership } from "../utils/verifyCloudinaryAsset.j
 import { sanitizePagination } from "../utils/pagination.js";
 import { sanitizeSort } from "../utils/sanitizeSort.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
-import { getCachedValue, setCachedValue } from "../utils/cache.js";
+import { getCachedValue, setCachedValue, invalidateCacheByScope } from "../utils/cache.js";
 import {
     ChannelNotificationAudience,
     dispatchChannelActivityNotification,
@@ -504,6 +504,8 @@ export const createTweet = asyncHandler(async (req, res) => {
         );
     });
 
+    void invalidateCacheByScope("tweets");
+
     return res.status(201).json(
         new ApiResponse(201, tweet, "Tweet created")
     );
@@ -686,26 +688,6 @@ export const getTweetFeed = asyncHandler(async (req, res) => {
             }
             totalItems = count;
             followingChannelsCount = profile.followingSet.size;
-        }
-    }
-
-    if (tweets.length < limit) {
-        const backfill = await appendRandomTweetBackfill({
-            currentTweets: tweets,
-            limit,
-            skip,
-            primaryTotal: totalItems,
-            baseWhere,
-            orderBy: [{ createdAt: "desc" }],
-            seedKey: `tweets:feed:${mode}:${userId || "anon"}:${page}:${limit}:${topic || "all"}:${sortType}`,
-        });
-
-        tweets = backfill.tweets;
-        usedBackfill = backfill.usedBackfill;
-        backfillCount = backfill.backfillCount;
-        totalItems = Math.max(totalItems, backfill.fallbackTotal, skip + tweets.length);
-        if (usedBackfill) {
-            ranking = `${ranking}+backfill`;
         }
     }
 
@@ -1064,6 +1046,8 @@ export const updateTweet = asyncHandler(async (req, res) => {
         },
     });
 
+    void invalidateCacheByScope("tweets");
+
     return res.status(200).json(
         new ApiResponse(200, updatedTweet, "Tweet updated successfully")
     );
@@ -1104,6 +1088,8 @@ export const deleteTweet = asyncHandler(async (req, res) => {
         },
     });
 
+    void invalidateCacheByScope("tweets");
+
     return res.status(200).json(
         new ApiResponse(200, {}, "Tweet deleted successfully")
     );
@@ -1137,6 +1123,8 @@ export const restoreTweet = asyncHandler(async (req, res) => {
             deletedAt: null,
         },
     });
+
+    void invalidateCacheByScope("tweets");
 
     return res.status(200).json(
         new ApiResponse(200, {}, "Tweet restored successfully")

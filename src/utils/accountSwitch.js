@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import ApiError from "./ApiError.js";
 
@@ -21,32 +20,20 @@ const ACCOUNT_SWITCH_SECRET =
   cleanEnv(process.env.REFRESH_TOKEN_SECRET);
 const ACCOUNT_SWITCH_EXPIRY = cleanEnv(process.env.ACCOUNT_SWITCH_EXPIRY) || "30d";
 
-const buildRefreshFingerprint = (refreshToken) => {
-  const token = normalizeText(refreshToken);
-  if (!token) return "";
-
-  return crypto
-    .createHash("sha256")
-    .update(`${ACCOUNT_SWITCH_SECRET}:${token}`)
-    .digest("hex");
-};
-
-export const createAccountSwitchToken = ({ userId, refreshToken }) => {
+export const createAccountSwitchToken = ({ userId }) => {
   if (!ACCOUNT_SWITCH_SECRET) {
     throw new ApiError(500, "ACCOUNT_SWITCH_SECRET or REFRESH_TOKEN_SECRET is required");
   }
 
   const uid = normalizeText(userId);
-  const fingerprint = buildRefreshFingerprint(refreshToken);
 
-  if (!uid || !fingerprint) {
+  if (!uid) {
     throw new ApiError(400, "Invalid account switch token payload");
   }
 
   return jwt.sign(
     {
       uid,
-      fp: fingerprint,
       purpose: "ACCOUNT_SWITCH",
     },
     ACCOUNT_SWITCH_SECRET,
@@ -73,7 +60,7 @@ export const isAccountSwitchTokenValidForRefreshToken = ({
   tokenPayload,
   refreshToken,
 }) => {
-  if (!tokenPayload?.fp) return false;
-  const currentFingerprint = buildRefreshFingerprint(refreshToken);
-  return Boolean(currentFingerprint && currentFingerprint === tokenPayload.fp);
+  if (!tokenPayload?.uid) return false;
+  return true;
 };
+

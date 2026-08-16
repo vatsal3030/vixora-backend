@@ -1064,7 +1064,10 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     ? buildAnswerFallback({
         question: message,
         title: video.title,
-        summary: video.summary || video.description,
+        description: video.description || video.summary,
+        tags: video.tags,
+        transcriptText: video.transcriptText,
+        user: req.user,
       })
     : `I can help with Vixora usage. Your question was: "${message}".`;
 
@@ -1072,7 +1075,7 @@ export const sendAiSessionMessage = asyncHandler(async (req, res) => {
     systemInstruction,
     userPrompt,
     temperature: 0.35,
-    maxOutputTokens: 500,
+    maxOutputTokens: 600,
     fallbackText,
   });
   metrics.recordAiRequest({
@@ -1444,6 +1447,10 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
   const fallbackSummary = buildSummaryFallback({
     title: video.title,
     description: video.description,
+    tags: video.tags,
+    duration: video.duration,
+    ownerName: video.owner?.fullName || video.owner?.username,
+    transcriptText: video.transcriptText,
   });
 
   const aiResult = await generateAiText({
@@ -1451,7 +1458,7 @@ export const generateVideoSummary = asyncHandler(async (req, res) => {
       "You are a precise video summarizer. Output compact bullet points with factual language.",
     userPrompt: prompt,
     temperature: 0.2,
-    maxOutputTokens: 450,
+    maxOutputTokens: 600,
     fallbackText: fallbackSummary,
   });
   metrics.recordAiRequest({
