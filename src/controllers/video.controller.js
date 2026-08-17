@@ -23,7 +23,6 @@ const dispatchNotificationInBackground = (payload) => {
     });
 };
 
-
 export const updateVideoScore = async (videoId) => {
     const video = await prisma.video.findUnique({
         where: { id: videoId },
@@ -54,7 +53,7 @@ export const updateVideoScore = async (videoId) => {
 export const getAllVideos = asyncHandler(async (req, res) => {
     let {
         page = "1",
-        limit = "10",
+        limit = "20",
         query = "",
         sortBy = "createdAt",
         sortType = "desc",
@@ -62,13 +61,13 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         tags = ""
     } = req.query;
 
-    const userId = req.user?.id; // Get current user ID for progress
+    const userId = req.user?.id;
 
     page = Number(page);
     limit = Number(limit);
 
     if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
+    if (isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 
     const skip = (page - 1) * limit;
 
@@ -83,7 +82,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         whereClause.isShort = isShort === "true";
     }
 
-    // 🔍 Search filters
     if (query && query.trim().length > 0) {
         whereClause.OR = [
             { title: { contains: query, mode: "insensitive" } },
@@ -91,7 +89,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
         ];
     }
 
-    // 🔖 Tag filter
     if (tags) {
         const tagArray = tags.split(",").map(t => t.trim().toLowerCase());
         whereClause.tags = {
@@ -111,7 +108,6 @@ export const getAllVideos = asyncHandler(async (req, res) => {
 
     sortType = sortType === "asc" ? "asc" : "desc";
 
-    // 🔥 APPLY SCORE ONLY WHEN SEARCH EXISTS
     let videos;
     let totalCount;
 
@@ -627,13 +623,13 @@ export const deleteVideo = asyncHandler(async (req, res) => {
 });
 
 export const getAllDeletedVideos = asyncHandler(async (req, res) => {
-    let { page = "1", limit = "10", sortBy = "createdAt", sortType = "desc", isShort } = req.query;
+    let { page = "1", limit = "20", sortBy = "createdAt", sortType = "desc", isShort } = req.query;
 
     page = Number(page);
     limit = Number(limit);
 
     if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
+    if (isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 
     const skip = (page - 1) * limit;
 
@@ -715,7 +711,7 @@ export const getAllDeletedVideos = asyncHandler(async (req, res) => {
                 totalItems: totalVideos,
                 legacyTotalKey: "totalVideos",
             }),
-            "Videos fetched successfully"
+            "Deleted videos fetched successfully"
         )
     );
 });
@@ -843,7 +839,7 @@ export const togglePublishStatus = asyncHandler(async (req, res) => {
 
 export const getUserVideos = asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    let { page = "1", limit = "10", query = "", sortBy = "createdAt", sortType = "desc", isShort } = req.query;
+    let { page = "1", limit = "20", query = "", sortBy = "createdAt", sortType = "desc", isShort } = req.query;
 
     if (!userId) {
         throw new ApiError(400, "User ID is required");
@@ -853,7 +849,7 @@ export const getUserVideos = asyncHandler(async (req, res) => {
     limit = Number(limit);
 
     if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1 || limit > 50) limit = 10;
+    if (isNaN(limit) || limit < 1 || limit > 100) limit = 20;
 
     const skip = (page - 1) * limit;
 
@@ -889,33 +885,6 @@ export const getUserVideos = asyncHandler(async (req, res) => {
         },
         skip,
         take: limit,
-        select: {
-            id: true,
-            title: true,
-            description: true,
-            thumbnail: true,
-            videoFile: true,
-            duration: true,
-            views: true,
-            isShort: true,
-            createdAt: true,
-            playbackUrl: true,
-            availableQualities: true,
-            processingStatus: true,
-            processingProgress: true,
-            owner: {
-                select: {
-                    id: true,
-                    username: true,
-                    fullName: true,
-                    avatar: true,
-                },
-            },
-        },
-    });
-
-    const totalVideos = await prisma.video.count({
-        where: whereClause,
     });
 
     return res.status(200).json(

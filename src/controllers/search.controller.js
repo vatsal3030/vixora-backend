@@ -672,6 +672,7 @@ const findVideos = async ({
   sortType,
   videoType = "all",
 }) => {
+  try {
   const where = buildVideoWhere({ q, tags, category, videoType });
   const fallbackBaseWhere = normalizeText(q)
     ? buildVideoWhere({ q: "", tags, category, videoType })
@@ -747,9 +748,14 @@ const findVideos = async ({
   }
 
   return { items, totalItems };
+  } catch (error) {
+    console.error("findVideos search error:", error?.message || error);
+    return { items: [], totalItems: 0 };
+  }
 };
 
 const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType }) => {
+  try {
   const where = buildChannelWhere({ q, category });
   const orderBy = resolveChannelOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
@@ -820,9 +826,14 @@ const findChannels = async ({ q, category, skip = 0, take = 10, sortBy, sortType
   }
 
   return { items, totalItems };
+  } catch (error) {
+    console.error("findChannels search error:", error?.message || error);
+    return { items: [], totalItems: 0 };
+  }
 };
 
 const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
+  try {
   const where = buildTweetWhere({ q });
   const orderBy = resolveTweetOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
@@ -888,9 +899,14 @@ const findTweets = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   }
 
   return { items, totalItems };
+  } catch (error) {
+    console.error("findTweets search error:", error?.message || error);
+    return { items: [], totalItems: 0 };
+  }
 };
 
 const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
+  try {
   const where = buildPlaylistWhere({ q });
   const orderBy = resolvePlaylistOrderBy(sortBy, sortType);
   const useRelevance = isRelevanceSort(sortBy, q) && skip < MAX_RELEVANCE_CANDIDATES;
@@ -953,6 +969,10 @@ const findPlaylists = async ({ q, skip = 0, take = 10, sortBy, sortType }) => {
   }
 
   return { items, totalItems };
+  } catch (error) {
+    console.error("findPlaylists search error:", error?.message || error);
+    return { items: [], totalItems: 0 };
+  }
 };
 
 const saveSearchHistory = async ({ userId, query }) => {

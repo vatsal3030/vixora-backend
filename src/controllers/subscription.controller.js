@@ -235,7 +235,7 @@ export const getSubscribedVideos = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized");
     }
 
-    let { page = "1", limit = "10" } = req.query;
+    let { page = "1", limit = "20" } = req.query;
 
     const { page: safePage, limit: safeLimit, skip } = sanitizePagination(page, limit, 50);
 

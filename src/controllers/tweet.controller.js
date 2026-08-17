@@ -861,7 +861,7 @@ export const getHotTweetTopics = asyncHandler(async (req, res) => {
 
 export const getUserTweets = asyncHandler(async (req, res) => {
     const { userId } = req.params;
-    let { page = "1", limit = "10", sortBy = "createdAt", sortType = "desc" } = req.query;
+    let { page = "1", limit = "20", sortBy = "createdAt", sortType = "desc" } = req.query;
 
     if (!userId) {
         throw new ApiError(400, "User ID is required");

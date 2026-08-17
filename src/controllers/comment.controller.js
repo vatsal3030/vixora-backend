@@ -132,7 +132,7 @@ export const getVideoComments = asyncHandler(async (req, res) => {
                             avatar: true,
                         }
                     },
-                    _count: { select: { likes: true } },
+                    _count: { select: { likes: true, replies: true } },
                     likes: userId ? { where: { likedById: userId }, select: { id: true } } : false,
                 }
             }
@@ -153,6 +153,7 @@ export const getVideoComments = asyncHandler(async (req, res) => {
         replies: comment.replies.map(reply => ({
             ...reply,
             likesCount: reply._count.likes,
+            repliesCount: reply._count.replies,
             isLiked: userId ? reply.likes.length > 0 : false,
             _count: undefined,
             likes: undefined,
@@ -183,10 +184,7 @@ export const getCommentReplies = asyncHandler(async (req, res) => {
     }
 
     const userId = req.user?.id || null;
-    const { page, limit } = sanitizePagination(req.query, { defaultLimit: 20 });
-    const safePage = page;
-    const safeLimit = limit;
-    const skip = (safePage - 1) * safeLimit;
+    const { page: safePage, limit: safeLimit, skip } = sanitizePagination(req.query?.page, req.query?.limit, 50);
 
     // Verify the parent comment exists
     const parentComment = await prisma.comment.findUnique({
@@ -303,19 +301,33 @@ export const addComment = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Video not found");
     }
 
+    // Verify parentId if passed
+    let parentId = req.body?.parentId || null;
+    if (parentId) {
+        const parent = await prisma.comment.findUnique({
+            where: { id: String(parentId) },
+            select: { id: true, isDeleted: true }
+        });
+        if (!parent || parent.isDeleted) {
+            parentId = null;
+        }
+    }
+
     // ✅ Create comment
     const comment = await prisma.comment.create({
         data: {
             content,
             ownerId: userId,
             videoId: videoId,
-            parentId: req.body?.parentId || null,
+            parentId: parentId,
         },
         select: {
             id: true,
             content: true,
             createdAt: true,
+            updatedAt: true,
             parentId: true,
+            ownerId: true,
             owner: {
                 select: {
                     id: true,
@@ -327,8 +339,16 @@ export const addComment = asyncHandler(async (req, res) => {
     });
     refreshVideoScoreInBackground(videoId);
 
+    const formattedComment = {
+        ...comment,
+        likesCount: 0,
+        repliesCount: 0,
+        isLiked: false,
+        replies: []
+    };
+
     return res.status(201).json(
-        new ApiResponse(201, comment, "Comment added successfully")
+        new ApiResponse(201, formattedComment, "Comment added successfully")
     );
 });
 

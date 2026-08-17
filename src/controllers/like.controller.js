@@ -239,7 +239,7 @@ export const toggleTweetLike = asyncHandler(async (req, res) => {
 export const getLikedVideos = asyncHandler(async (req, res) => {
     let {
         page = "1",
-        limit = "10",
+        limit = "20",
         sortType = "desc"
     } = req.query;
 

@@ -137,7 +137,7 @@ export const getContinueWatching = asyncHandler(async (req, res) => {
 
   let {
     page = "1",
-    limit = "10",
+    limit = "20",
     query = "",
     isShort = "",
     includeCompleted = "false",
