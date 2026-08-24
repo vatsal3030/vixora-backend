@@ -19,6 +19,7 @@ import {
     isAccountSwitchTokenValidForRefreshToken,
     verifyAccountSwitchToken,
 } from "../utils/accountSwitch.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 
 const normalizeEmail = (value) => String(value ?? "").trim().toLowerCase();
 const normalizeUsername = (value) => String(value ?? "").trim();
@@ -675,6 +676,13 @@ export const loginUser = asyncHandler(async (req, res) => {
     });
 
     const options = getCookieOptions();
+
+    void recordUserActivity({
+        req,
+        userId: loggedInUser.id,
+        action: "LOGIN",
+        dedupeMinutes: 0,
+    });
 
     return res.
         status(200).

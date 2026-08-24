@@ -48,6 +48,10 @@ import {
   getAdminAuditLogById,
   getAdminAuditLogs,
 } from "../controllers/admin/admin.audit.controller.js";
+import {
+  getAdminUserActivities,
+  getAdminUserActivityStats,
+} from "../controllers/admin/admin.userActivity.controller.js";
 import { seedAdminFeedTopics } from "../controllers/admin/admin.feed.controller.js";
 
 const router = Router();
@@ -96,6 +100,9 @@ router.patch("/playlists/:playlistId/restore", getModeratorOrAbove(), restoreAdm
 
 router.get("/audit-logs", getAdminOrAbove(), getAdminAuditLogs);
 router.get("/audit-logs/:logId", getAdminOrAbove(), getAdminAuditLogById);
+
+router.get("/user-activity", getModeratorOrAbove(), getAdminUserActivities);
+router.get("/user-activity/stats", getModeratorOrAbove(), getAdminUserActivityStats);
 
 function getModeratorOrAbove() {
   return requireAdminRole("MODERATOR", "ADMIN", "SUPER_ADMIN");

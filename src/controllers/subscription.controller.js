@@ -5,6 +5,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
 import { invalidateCacheByScope } from "../utils/cache.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 
 const NOTIFICATION_LEVELS = new Set(["ALL", "PERSONALIZED", "NONE"]);
 
@@ -94,6 +95,15 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
             where: { channelId },
         });
 
+        void recordUserActivity({
+            req,
+            userId,
+            action: "UNSUBSCRIBE",
+            targetType: "CHANNEL",
+            targetId: channelId,
+            dedupeMinutes: 0,
+        });
+
         return res.status(200).json(
             new ApiResponse(
                 200,
@@ -117,6 +127,15 @@ export const toggleSubscription = asyncHandler(async (req, res) => {
 
     const subscriberCount = await prisma.subscription.count({
         where: { channelId },
+    });
+
+    void recordUserActivity({
+        req,
+        userId,
+        action: "SUBSCRIBE",
+        targetType: "CHANNEL",
+        targetId: channelId,
+        dedupeMinutes: 0,
     });
 
     return res.status(201).json(

@@ -40,6 +40,7 @@ model User {
   moderatedById            String?
   aichatSessions           AIChatSession[]
   adminAuditLogs           AdminAuditLog[]         @relation("AdminAuditActor")
+  userActivityLogs         UserActivityLog[]       @relation("UserActivityLogs")
   channelCategories        ChannelCategory[]
   comments                 Comment[]
   feedScores               FeedScore[]
@@ -353,7 +354,7 @@ model Subscription {
 model Comment {
   id        String    @id @default(uuid())
   content   String
-  videoId   String
+  videoId   String?
   ownerId   String
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -364,11 +365,12 @@ model Comment {
   parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies   Comment[] @relation("CommentReplies")
   owner     User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  tweet     Tweet?    @relation(fields: [tweetId], references: [id])
-  video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  tweet     Tweet?    @relation(fields: [tweetId], references: [id], onDelete: Cascade)
+  video     Video?    @relation(fields: [videoId], references: [id], onDelete: Cascade)
   likes     Like[]
 
   @@index([videoId])
+  @@index([tweetId])
   @@index([ownerId])
   @@index([updatedAt])
   @@index([createdAt])
@@ -651,6 +653,24 @@ model AdminAuditLog {
   @@index([action])
   @@index([targetType, targetId])
   @@index([createdAt])
+}
+
+model UserActivityLog {
+  id         String   @id @default(uuid())
+  userId     String
+  action     String   // WATCH, LIKE, UNLIKE, COMMENT, SUBSCRIBE, UNSUBSCRIBE, UPLOAD, LOGIN, SEARCH, TWEET
+  targetType String?  // VIDEO, COMMENT, TWEET, CHANNEL, PLAYLIST
+  targetId   String?
+  metadata   Json?    // extra context: search query, video title, etc.
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  user       User     @relation("UserActivityLogs", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([userId, action, targetId])
 }
 
 enum ProcessingStatus {

@@ -16,6 +16,7 @@ import {
     dispatchChannelActivityNotification,
 } from "../services/notification.service.js";
 import { metrics } from "../observability/usage.metrics.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 
 const MAX_UPLOAD_FILE_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const MAX_UPLOAD_FILENAME_LENGTH = 255;
@@ -965,6 +966,16 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
         processVideoWithoutQueue(video.id);
     }
 
+    void recordUserActivity({
+        req,
+        userId: req.user.id,
+        action: "UPLOAD",
+        targetType: video.isShort ? "SHORT" : "VIDEO",
+        targetId: video.id,
+        metadata: { title: video.title, isShort: video.isShort },
+        dedupeMinutes: 0,
+    });
+
     return res.status(200).json(
         new ApiResponse(
             200,
@@ -973,4 +984,3 @@ export const finalizeUpload = asyncHandler(async (req, res) => {
         )
     );
 });
-

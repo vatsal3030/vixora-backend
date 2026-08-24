@@ -5,6 +5,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
 import { invalidateCacheByScope } from "../utils/cache.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 // import upd from "../utils/updateFeedScrore.js"
 
 // 1. Get videoId from params
@@ -105,6 +106,14 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
         })
         refreshVideoScoreInBackground(videoId);
         void invalidateCacheByScope("video");
+        void recordUserActivity({
+            req,
+            userId,
+            action: "UNLIKE",
+            targetType: "VIDEO",
+            targetId: videoId,
+            dedupeMinutes: 0,
+        });
         return res.status(200).json(
             new ApiResponse(200, { status: "unliked" }, "Video unliked")
         );
@@ -120,6 +129,14 @@ export const toggleVideoLike = asyncHandler(async (req, res) => {
 
     refreshVideoScoreInBackground(videoId);
     void invalidateCacheByScope("video");
+    void recordUserActivity({
+        req,
+        userId,
+        action: "LIKE",
+        targetType: "VIDEO",
+        targetId: videoId,
+        dedupeMinutes: 0,
+    });
 
     return res.status(201).json(
         new ApiResponse(201, { status: "liked" }, "Video liked")

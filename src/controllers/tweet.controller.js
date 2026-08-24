@@ -12,6 +12,7 @@ import {
     ChannelNotificationAudience,
     dispatchChannelActivityNotification,
 } from "../services/notification.service.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 
 const MAX_TWEET_CONTENT_LENGTH = 500;
 const MAX_FEED_LIMIT = 100;
@@ -505,6 +506,16 @@ export const createTweet = asyncHandler(async (req, res) => {
     });
 
     void invalidateCacheByScope("tweets");
+
+    void recordUserActivity({
+        req,
+        userId: req.user.id,
+        action: "TWEET",
+        targetType: "TWEET",
+        targetId: tweet.id,
+        metadata: { preview: content.slice(0, 100), hasImage: Boolean(finalImageUrl) },
+        dedupeMinutes: 0,
+    });
 
     return res.status(201).json(
         new ApiResponse(201, tweet, "Tweet created")

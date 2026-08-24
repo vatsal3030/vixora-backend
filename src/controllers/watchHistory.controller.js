@@ -5,6 +5,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 import { sanitizePagination } from "../utils/pagination.js";
 import { sanitizeSort } from "../utils/sanitizeSort.js";
 import { buildPaginatedListData } from "../utils/listResponse.js";
+import { recordUserActivity } from "../services/user.activity.service.js";
 
 const parseBooleanQuery = (value) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -104,6 +105,16 @@ export const saveWatchProgress = asyncHandler(async (req, res) => {
       completed,
       lastWatchedAt: new Date(),
     },
+  });
+
+  void recordUserActivity({
+    req,
+    userId,
+    action: "WATCH",
+    targetType: "VIDEO",
+    targetId: videoId,
+    metadata: { progress, duration: normalizedDuration },
+    dedupeMinutes: 5,
   });
 
   return res.json(new ApiResponse(200, result, "Progress saved"));
